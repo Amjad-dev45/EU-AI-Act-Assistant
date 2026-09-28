@@ -1,8 +1,27 @@
-.venv/
+# Credentials and local environments
 .env
-data/
-.DS_Store
-logs/
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Local documents, indexes, and request logs
+/data/
+/logs/
+
+# Python and development caches
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build artifacts and OS files
+build/
+dist/
+*.egg-info/
+.DS_Store
+Thumbs.db

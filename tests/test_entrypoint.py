@@ -17,8 +17,8 @@ sys.path.insert(0, str(repo / 'app'))
 sys.path.insert(0, str(repo))
 import app
 assert Path(app.__file__).resolve() == repo / 'app' / '__init__.py'
-from app.retrieval import Retriever
-from app.answering import Answerer
+from app.rag.retrieval import Retriever
+from app.rag.answering import Answerer
 """
         result = subprocess.run([sys.executable, "-c", script, str(repo)],
                                 cwd=repo, capture_output=True, text=True)

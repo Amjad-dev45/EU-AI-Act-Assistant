@@ -1,151 +1,160 @@
-# team-6.7
+# EU AI Act Assistant — team-6.7
 
-## Team members
-- Majd Hammoud
-- Rabeeh Abou Ismail
-- Amjad Bsat
+A retrieval-augmented generation (RAG) assistant for the team's English EU AI Act corpus. It searches saved FAISS vectors, generates answers grounded in retrieved passages, and displays document/page citations with highlighted PDF pages. The Gradio UI and command-line tools share the same backend.
 
-## Prepare retrieval chunks
+Team: Majd Hammoud, Rabeeh Abou Ismail, and Amjad Bsat.
 
-Use Python 3.12. With the course workspace layout, run from this repository:
+## Setup
 
-```bash
-uv run --python 3.12 --no-project scripts/chunk.py --data-dir data
-```
-
-The data folder is inside this repository but excluded from Git and contains `corpus.json`, `sample.json`, `questions.json`, and `sources/OJ_L_202401689_EN_TXT.pdf`. Supply a different `--data-dir` if needed. Data is shared through Teams, not committed to Git.
-
-The script writes `chunks.json`: up to 1,000 characters per chunk with 200 characters of overlap. It joins consecutive pages within each source document, allowing chunks and overlap to cross page boundaries. It prefers sentence endings in the final quarter of the chunk, falls back to whitespace, and finally uses a hard cut. Sentence detection is a punctuation heuristic; it may split abbreviations and cannot guarantee whole sentences longer than the overlap or chunk limit. Footnotes remain in their extracted positions. Sizes are characters, not tokens. Each chunk records `source`, `pages` (all contributing pages), `page` (first page for compatibility), and `start_char`/`end_char` offsets into the joined document text. Use the full `pages` list for citations and evaluation. Missing or duplicate pages are rejected rather than silently joined. These defaults are a starting point to evaluate with retrieval. Override them using `--chunk-size` and `--overlap`. No external packages or API key are needed for this step.
-
-Existing `chunks.json` is not overwritten: its order must stay aligned with the FAISS vectors once an index exists. Use the indexing script below after reviewing your chunks.
-
-
-## Embeddings and FAISS index
-
-Create the Python 3.12 environment and install dependencies:
+Use Python **3.12** and **uv**, as required by the course. `.python-version` records the Python version; `requirements.txt` pins the direct runtime packages verified for this project. These pins do not lock every transitive dependency.
 
 ```bash
 uv venv --python 3.12
-uv pip install --python .venv/bin/python -r requirements.txt
+uv pip install --python .venv -r requirements.txt
 ```
 
-Copy `.env.example` to `.env` if you have not already created it, and set `OPENAI_API_KEY`. Never commit `.env`.
+Create `.env` from `.env.example` only if it does not already exist. Set `OPENAI_API_KEY` locally. Never commit `.env` or share it in an archive. Optional path overrides are documented in `.env.example`; relative environment paths resolve from the repository root.
 
-Preview token usage without embedding API calls:
+Place the team's shared data inside this checkout, beside `app/` and `scripts/`:
+
+```text
+team-6.7/
+├── app/                     # Application code, grouped by purpose
+│   ├── app.py               # UI launcher
+│   ├── settings.py          # Shared repository paths and overrides
+│   ├── rag/                 # Retrieval and grounded answer generation
+│   ├── ui/                  # Gradio, source highlighting, error display
+│   ├── evaluation/          # Reference metrics and optional model judge
+│   └── monitoring/          # Token/cost accounting, timing, SQLite records
+├── scripts/                 # Extraction, indexing, checks, and CLI commands
+├── config/pricing.json      # Versioned API price estimates
+├── tests/                   # Offline automated checks
+├── docs/                    # Architecture, requirements, and metric definitions
+├── data/                    # Gitignored; shared through Teams
+│   ├── sources/OJ_L_202401689_EN_TXT.pdf
+│   ├── corpus.json
+│   ├── sample.json
+│   ├── questions.json
+│   ├── chunks.json
+│   ├── my_index.faiss
+│   └── index_metadata.json
+└── logs/                    # Gitignored request DB and evaluation run archives
+```
+
+Normal answering needs the matching `chunks.json`, `my_index.faiss`, and `index_metadata.json`; source highlighting also needs the PDF. Evaluation needs `questions.json`. Keep shared index files together. The data folder is inside the project but excluded from Git, matching the course layout. Do not re-embed a corpus that already has a matching shared index.
+
+## Run the UI
+
+Run from the repository root:
 
 ```bash
+.venv/bin/python app/app.py
+```
+
+On Windows PowerShell, replace `.venv/bin/python` with `.venv/Scripts/python.exe` in every command below.
+
+The existing interface includes highlighted source pages, request/session usage, estimated costs, timings, and an optional **Evaluate answer quality** checkbox. The judge adds a paid model call and is off by default. **Start new session** resets the statistics grouping; it does not delete earlier logs. Session IDs are not conversation memory: follow-up rewriting has not been implemented.
+
+Failed requests show redacted diagnostic details for local debugging. The interface still uses the original response fields and citation IDs. See [architecture](docs/architecture.md) for the new Python import paths.
+
+## Use the backend without a UI
+
+```bash
+# Retrieve passages and check expected source/page coverage.
+.venv/bin/python scripts/retrieval_checker.py --data-dir data --question-id 2
+
+# Generate a cited answer.
+.venv/bin/python scripts/ask.py --data-dir data --question-id 2
+
+# Ask your own question and return structured JSON.
+.venv/bin/python scripts/ask.py --data-dir data --question "What practices are prohibited?" --json
+```
+
+Question IDs are 1-based positions in `questions.json`. Retrieval makes one paid question-embedding call; answering also makes one paid generation call. `--k` controls how many passages are retrieved (default 5). `scripts/ask.py` also accepts `--conversation-id` for monitoring groups and `--judge` for optional semantic evaluation. Similarity scores are not correctness probabilities, and page coverage does not prove that the right evidence or answer was found.
+
+## Prepare data only when necessary
+
+The original extraction script reads the gitignored `data/sources/` folder and writes `corpus.json` and `sample.json`. Run it from the repository root when preparing new source data:
+
+```bash
+.venv/bin/python scripts/extract.py
+.venv/bin/python scripts/chunk.py --data-dir data
+```
+
+Chunking joins consecutive pages within each source and records every contributing page. Defaults: **1,000 characters maximum, 200 characters overlap**, producing 805 chunks for the current corpus. It prefers sentence endings, then whitespace, then a hard cut. This heuristic does not perfectly handle abbreviations, long sentences, or footnotes. Chunk `start_char`/`end_char` offsets refer to joined document text; `pages` supplies all citation pages, while `page` keeps the first page for compatibility. Existing `chunks.json` is not overwritten.
+
+```bash
+# Token preview: no embedding API calls; tokenizer may download its vocabulary.
 .venv/bin/python scripts/build_index.py --data-dir data
-```
 
-The tokenizer may download its vocabulary the first time. The preview does not load `.env` or create an OpenAI client.
-
-After reviewing the preview, generate embeddings and build the index (paid API calls for uncached batches):
-
-```bash
+# Paid indexing, only when a matching index does not already exist.
 .venv/bin/python scripts/build_index.py --data-dir data --run
 ```
 
-The script uses `text-embedding-3-small`, batches 50 chunks per request, and caches completed batches under `embedding_cache/` in the data directory. The cache depends on the model and exact chunks file. A rerun reuses completed batches. A failed request or interrupted cache write can still require retrying a batch. Run only one indexing process at a time.
+Indexing uses `text-embedding-3-small`, batches of 50, and a cache keyed by the model and exact chunks file. It stores normalized float32 vectors in `embeddings.npy`, a FAISS `IndexFlatIP` in `my_index.faiss`, and integrity metadata in `index_metadata.json`. A rerun reuses completed batches; interrupted requests or cache writes may still need retries. Run one indexer at a time. Changing chunks requires the corresponding index to be rebuilt. Normal answering does not need the `.npy` file or embedding cache.
 
-Outputs are `embeddings.npy`, `my_index.faiss`, and `index_metadata.json`. Keep them with the exact matching `chunks.json`; the metadata records its SHA-256 checksum. FAISS uses normalized vectors with inner-product search, equivalent to cosine similarity. Any later retrieval code must validate the checksum and use each chunk's full `pages` list.
-
-The script reports token usage returned by successful embedding calls; check the provider dashboard for actual total spending, including any retries. Generated data stays excluded from Git and can be shared with teammates through Teams.
-
-
-## Inspect retrieval
-
-Test one of the team's existing evaluation questions (1-based position in questions.json):
+## Evaluate quality and monitor usage
 
 ```bash
-.venv/bin/python scripts/retrieval_checker.py --data-dir data --question-id 2
+# Validate the course dataset without any paid calls.
+.venv/bin/python scripts/eval_runner.py --data-dir data
+
+# Run labelled questions; optional --judge adds semantic/reference scoring.
+.venv/bin/python scripts/eval_runner.py --data-dir data --limit 5 --run
+.venv/bin/python scripts/eval_runner.py --data-dir data --limit 5 --judge --run
+
+# Read saved statistics without model calls.
+.venv/bin/python scripts/monitor.py --kind interactive --recent 5
 ```
 
-Or supply your own question:
+`eval_runner.py` is the course-named entry point; `scripts/evaluate.py` remains supported with the same options. `--limit 5` selects the first five dataset entries, not the five priority questions. Add `--output` to select a report path. Reports are checkpointed after each question under `logs/evaluations/`; the latest report is also saved to `data/eval_results.json`. The input questions are never rewritten.
+
+Metrics include page recall/coverage, page-hit precision and MRR, optional exact-chunk metrics, lexical exact match/token F1, and expected behavior. Missing reference fields remain not applicable (`null`). Exact match/F1 are not semantic accuracy; the optional judge's relevance, faithfulness, and reference correctness are estimates. See [metric definitions and limitations](docs/monitoring.md).
+
+Answer requests, including failures, are recorded locally in `logs/requests.sqlite3`. Queries, answers, usage, source metadata, costs and timings are saved; full retrieved passages, API keys and raw provider payloads are not. Prices are estimates from `config/pricing.json`, not a billing statement. Indexing usage is separately reported by its script. Record observed retrieval/answer failures and fixes in [scripts/FAILURE_LOG.md](scripts/FAILURE_LOG.md).
+
+## Tests and current status
 
 ```bash
-.venv/bin/python scripts/retrieval_checker.py --data-dir data --question "What AI practices are prohibited?"
+uv pip install --python .venv -r requirements-dev.txt
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-Each execution makes one paid question-embedding request; it does not regenerate corpus embeddings or generate an answer. Use `--k 10` to inspect more passages and `--json` for structured output. Similarity scores are not confidence probabilities.
+Tests use synthetic documents and mocked provider responses, with no paid API requests. They cover the backend, telemetry, citation checks, errors, session separation, source rendering, null course labels, and command entry points.
 
-The checker displays source documents, all contributing pages, passage text, and similarity scores. With `--question-id`, it reports which expected source/page pairs were found. A page match measures retrieval coverage, not whether the exact evidence was retrieved or an answer is correct. Questions without expected pages are reported as N/A.
+Basic live tests previously passed for one factual fine question and one out-of-scope weather question. The full 44-question accuracy evaluation is still pending. This reorganization does not add conversation memory or the later agentic project. See [course requirement review](docs/requirements-check.md) and [module responsibilities](docs/architecture.md).
 
-`app/retrieval.py` exposes `Retriever(data_dir, client).retrieve(question, k=5)` for use by the existing UI and later answer-generation code. Reuse the Retriever instance to avoid reloading the index for each question. It checks the saved chunks checksum and index dimensions/counts. Backend credentials must remain in the Python process, never in browser code.
+## Local passage reranking
 
+Reranking is enabled by default for the UI, CLI and evaluation runner. FAISS retrieves
+20 candidates; `cross-encoder/ms-marco-MiniLM-L6-v2` scores question/passage pairs on
+CPU and passes the best 5 (or requested `--k`) to the answerer. The model loads once
+per process and downloads into the normal Hugging Face cache on first use. Internet
+access is needed for this first download. No index rebuild or extra API calls are
+needed. The first question will take longer. The model uses a 512-token pair limit;
+very long questions/passages may be truncated by the model tokenizer.
 
-## Generate a cited answer
+After pulling, install `requirements.txt` using the setup command above. Existing
+`.env` files work unchanged. Optional overrides are in `.env.example`:
+`RAG_RERANK_ENABLED=false` restores FAISS-only retrieval, and
+`RAG_RERANK_CANDIDATES=20` controls the candidate pool (at least the requested k).
+Restart the app after changing these settings. Installation includes PyTorch;
+CPU-only machines can install its CPU build using the official PyTorch instructions.
+
+In the UI, expand **Usage and answer quality** to inspect reranking settings,
+candidate/final rankings and `reranking_time_ms`. Cosine `score` and cross-encoder
+`rerank_score` are different scales; neither is an accuracy percentage.
+
+To measure improvement, evaluate the same questions and k in both modes. These
+commands make paid embedding/generation calls; add `--judge` to both for paid
+reference-correctness estimates:
 
 ```bash
-.venv/bin/python scripts/ask.py --data-dir data --question-id 2
+RAG_RERANK_ENABLED=false .venv/bin/python scripts/eval_runner.py --data-dir data --run --output logs/evaluations/baseline.json
+RAG_RERANK_ENABLED=true .venv/bin/python scripts/eval_runner.py --data-dir data --run --output logs/evaluations/reranked.json
 ```
 
-Use `--question "your question"` for free text, `--k` for retrieval count, and `--json` for structured output. Each execution makes a paid question-embedding request and a paid gpt-4o-mini generation request. The output includes the answer, citation labels mapped to source/page metadata, retrieved passages, status, and token usage.
-
-The prompt requires document-grounded answers, clarification for ambiguous questions, and refusal when evidence is insufficient. Citation validation checks reference IDs, not whether the claims are factually supported; test with the evaluation set. There is no conversation memory yet.
-
-The existing Gradio UI uses `Answerer(retriever, client)` and displays cited, highlighted source pages. The same backend serves `scripts/ask.py` and the evaluation runner. There is no conversation memory; session IDs group monitoring statistics only.
-
-## Run the UI (Windows / PowerShell)
-
-From this repository, with Python 3.12 and uv installed:
-
-```powershell
-uv venv --python 3.12
-uv pip install --python .venv/Scripts/python.exe -r requirements.txt
-Copy-Item .env.example .env  # only if .env does not already exist
-```
-
-Set `OPENAI_API_KEY` in `.env` and point `RAG_DATA_DIR` at the folder with the matching
-`chunks.json`, `my_index.faiss`, `index_metadata.json`, and `sources/`.
-In this workspace that folder is `data/` inside this repository.
-
-```powershell
-.venv/Scripts/python.exe app/app.py
-```
-
-On macOS/Linux use `.venv/bin/python` instead. The existing source highlighting and
-answer validation remain in place. The UI's **Usage and answer quality** panel shows
-request tokens, estimated cost, timings, retrieval/citation counts, and session totals.
-**Evaluate answer quality** adds one paid judge call; it is off by default.
-**Start new session** resets the session grouping, without deleting earlier logs.
-
-Failed questions show an **Error details** panel with the exception chain, file/line
-traceback, and request ID. The same diagnostics are printed in the server terminal.
-Configured secret values and common API-key/authorization patterns are redacted;
-stack locals are never captured. This verbose view is intended for local debugging.
-
-## Evaluation, monitoring and costs
-
-See [docs/monitoring.md](docs/monitoring.md) for metric definitions, limitations,
-dataset format, pricing, storage and extension points.
-
-Every answer request is saved locally to `logs/requests.sqlite3`, including failed
-requests and usage already incurred. Retrieved text and full documents are not copied
-into the log. Queries, answers and source metadata are logged. `logs/` is gitignored.
-Pricing is centralized in [config/pricing.json](config/pricing.json).
-
-```powershell
-# Read-only monitoring: no model calls
-.venv/Scripts/python.exe scripts/monitor.py --kind interactive --recent 5
-.venv/Scripts/python.exe scripts/monitor.py --conversation-id YOUR_SESSION_ID
-
-# Reuse an ID to aggregate CLI requests into one conversation
-.venv/Scripts/python.exe scripts/ask.py --data-dir data --question "What practices are prohibited?" --conversation-id demo
-
-# Validate a dataset and preview calls without spending
-.venv/Scripts/python.exe scripts/evaluate.py --data-dir data
-
-# Run the existing RAG application on labelled questions
-.venv/Scripts/python.exe scripts/evaluate.py --data-dir data --run
-
-# Include the additional semantic/reference judge; start with a small subset
-.venv/Scripts/python.exe scripts/evaluate.py --data-dir data --limit 5 --judge --run
-
-# Offline integration tests: synthetic corpus, no paid API requests
-.venv/Scripts/python.exe -m unittest discover -s tests -v
-```
-
-Evaluation reports are checkpointed after each question under `logs/evaluations/`.
-They include per-question metrics, category/difficulty averages with sample counts,
-errors, costs and latency. Evaluation runs and standalone retrieval checks are tagged
-separately from interactive traffic so they can be excluded from usage averages.
+Compare `metrics.expected_page_recall`, `page_hit_mrr`, answer token F1 and optional
+`judge_reference_correctness`, including each metric's sample count. Page recall
+is an evidence-location proxy, not proof of correct evidence. Full evaluation is
+still pending; reranking improvement has not been established on this dataset.

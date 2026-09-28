@@ -16,6 +16,7 @@ SOURCES = Path("data/sources")
 OUT_DIR = Path("data")
 MIN_CHARS = 50
 
+# PDF-specific header/footer patterns; preserve useful source text.
 KNOWN_NOISE_PATTERNS = [
     r"^(EN\s+)?OJ L, \d{1,2}\.\d{1,2}\.\d{4}(\s+EN)?$",
     r"^(\d+/\d+\s+)?ELI: https?://data\.europa\.eu/eli/\S+(\s+\d+/\d+)?$",
@@ -86,6 +87,7 @@ def join_wrapped_lines(lines: list[str]) -> list[str]:
     return out
 
 
+# Compose extraction cleanup before counting or storing characters.
 def clean(text: str, repeated: set[str] = frozenset()) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = text.replace("\u00a0", " ").replace("\u00ad", "")
@@ -95,6 +97,7 @@ def clean(text: str, repeated: set[str] = frozenset()) -> str:
     lines = join_wrapped_lines(lines)
     return "\n".join(lines).strip()
 
+# Read each supported file format while preserving source page numbers.
 def extract_pdf(path: Path):
     doc = fitz.open(path)
     raw_pages = [page.get_text("text") for page in doc]
@@ -114,6 +117,8 @@ EXTRACTORS = {
     ".md": extract_text_file,
 }
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     if not SOURCES.exists():
         raise SystemExit(f"{SOURCES} not found. Run this from the repo root.")
@@ -149,5 +154,6 @@ def main():
         print(f"  - {item}")
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()

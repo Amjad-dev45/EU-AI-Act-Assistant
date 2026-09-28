@@ -8,6 +8,7 @@ import traceback
 from uuid import uuid4
 
 
+# Redact configured credentials before they reach logs or the browser.
 def redact(text):
     secrets = [value for name, value in os.environ.items()
                if re.search(r"KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL", name, re.I) and len(value) >= 6]
@@ -18,6 +19,7 @@ def redact(text):
     return re.sub(r"(https?://)[^/\s@]+:[^/\s@]+@", r"\1[REDACTED]@", text)
 
 
+# Render a useful local debugging panel without capturing stack locals.
 def error_details(exc):
     """Include chained exceptions and stack locations, never captured locals."""
     error_id = getattr(exc, "rag_request_id", None) or str(uuid4())

@@ -1,8 +1,10 @@
+"""Verify local error details retain useful traces while redacting credentials."""
+
 import os
 import unittest
 from unittest.mock import patch
 
-from app.diagnostics import error_details
+from app.ui.diagnostics import error_details
 
 
 class DiagnosticsTests(unittest.TestCase):
@@ -15,7 +17,7 @@ class DiagnosticsTests(unittest.TestCase):
                     raise RuntimeError("<script>bad</script> Bearer hidden-token sk-example-secret") from cause
             except RuntimeError as exc:
                 exc.rag_request_id = "request-test"
-                with self.assertLogs("app.diagnostics", level="ERROR") as logs:
+                with self.assertLogs("app.ui.diagnostics", level="ERROR") as logs:
                     details = error_details(exc)
         rendered = details["html"] + details["summary"] + "".join(logs.output)
         self.assertIn("ConnectionRefusedError", details["html"])

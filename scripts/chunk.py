@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 
+# Find overlapping character spans, preferring sentence or word boundaries.
 def chunk_text(text: str, chunk_size: int, overlap: int):
     """Yield exact spans; prefer sentence endings, then whitespace, then a cut."""
     if not 0 <= overlap < chunk_size:
@@ -34,6 +35,7 @@ def chunk_text(text: str, chunk_size: int, overlap: int):
         start = end - overlap
 
 
+# Join consecutive source pages and map every chunk back to its page ranges.
 def chunk_corpus(corpus: list, chunk_size: int, overlap: int) -> list:
     if not 0 <= overlap < chunk_size:
         raise ValueError("Require 0 <= overlap < chunk_size")
@@ -84,6 +86,8 @@ def chunk_corpus(corpus: list, chunk_size: int, overlap: int) -> list:
     return chunks
 
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True,
@@ -92,6 +96,7 @@ def main():
                         help="Maximum characters per chunk (default: 1000)")
     parser.add_argument("--overlap", type=int, default=200,
                         help="Shared characters between chunks (default: 200)")
+    # Parse options before opening files or making API requests.
     args = parser.parse_args()
     if not 0 <= args.overlap < args.chunk_size:
         parser.error("Require 0 <= overlap < chunk-size")
@@ -110,5 +115,6 @@ def main():
     print(f"Saved: {output}")
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()

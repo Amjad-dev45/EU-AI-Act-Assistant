@@ -3,11 +3,12 @@
 import json
 import re
 
-from .evaluation import evaluate_semantics, labelled_metrics
-from .monitoring import Monitor
+from app.evaluation import evaluate_semantics, labelled_metrics
+from app.monitoring import Monitor
 
 MODEL = "gpt-4o-mini"
 NO_EVIDENCE = "I don't have enough information in the provided documents."
+# Grounding and citation rules sent with every answer request.
 SYSTEM_PROMPT = f"""
 Answer questions using only the supplied passages.
 
@@ -35,6 +36,7 @@ class Answerer:
 
     def answer(self, question, k=5, *, conversation_id=None, evaluate=False,
                label=None, kind="interactive", metadata=None):
+        # One trace includes retrieval, generation, and optional evaluation.
         trace = self.monitor.trace(question, conversation_id, kind, metadata)
         result = None
         try:
@@ -62,6 +64,7 @@ class Answerer:
         return result
 
     def _answer(self, question, k, trace):
+        # Retrieve evidence and assign citation IDs owned by this answer.
         retrieval = self.retriever.retrieve(question, k=k, trace=trace)
         with trace.stage("context_building"):
             passages = [
@@ -82,10 +85,12 @@ class Answerer:
         trace.retrieved(passages)
         trace.record["context_chunk_ids"] = [p["chunk_id"] for p in passages]
         trace.record["context_document_ids"] = sorted({p["document_id"] for p in trace.record["retrieval"]})
+        # Record generation usage even when validation later rejects output.
         response = trace.api_call("llm_generation", "main_llm", MODEL, lambda: self.client.chat.completions.create(
             model=MODEL, temperature=0, max_completion_tokens=600,
             messages=messages,
         ))
+        # Validate response completion and citation labels (not factual truth).
         choice = response.choices[0]
         if choice.message.refusal:
             raise ValueError("The model declined this request")
@@ -113,6 +118,7 @@ class Answerer:
         needs_clarification = answer.startswith("Please clarify:")
         if not cited_ids and not (is_refusal or needs_clarification):
             raise ValueError("The answer is missing source citations")
+        # Keep the same structured response for the UI, CLI, and evaluator.
         return {
             "question": retrieval["question"],
             "answer": answer,

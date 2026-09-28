@@ -19,10 +19,11 @@ import httpx
 import numpy as np
 from openai import OpenAI
 
-from app.answering import Answerer, NO_EVIDENCE
+from app.rag.answering import Answerer, NO_EVIDENCE
 from app.evaluation import labelled_metrics, validate_labels
 from app.monitoring import Monitor, Pricing, provider_usage
-from app.retrieval import Retriever
+from app.rag.retrieval import Retriever
+from app.rag.reranking import Reranker
 
 
 def chat_response(text="The amount is 100 euros. [1]", finish="stop", usage=True):
@@ -59,8 +60,8 @@ class ObservabilityTests(unittest.TestCase):
         self.client = Mock()
         self.client.embeddings.create.return_value = embedding_response()
         self.client.chat.completions.create.return_value = chat_response()
-        with patch("app.retrieval.tiktoken.encoding_for_model", return_value=NS(encode=lambda *a, **kw: [1, 2])):
-            self.retriever = Retriever(self.root, self.client)
+        with patch("app.rag.retrieval.tiktoken.encoding_for_model", return_value=NS(encode=lambda *a, **kw: [1, 2])):
+            self.retriever = Retriever(self.root, self.client, reranker=Reranker(enabled=False))
         self.monitor = Monitor(self.root / "metrics.sqlite3")
         self.answerer = Answerer(self.retriever, self.client, self.monitor)
 
@@ -274,13 +275,14 @@ class ObservabilityTests(unittest.TestCase):
         self.client.chat.completions.create.side_effect = [chat_response(), RuntimeError()]
         with patch("sys.argv", ["evaluate.py", "--data-dir", str(self.root), "--output", str(output), "--run"]), \
              patch("openai.OpenAI", return_value=self.client), \
-             patch("app.retrieval.Retriever", return_value=self.retriever), \
-             patch("app.answering.Answerer", return_value=self.answerer), \
+             patch("app.rag.retrieval.Retriever", return_value=self.retriever), \
+             patch("app.rag.answering.Answerer", return_value=self.answerer), \
              patch("sys.stdout", new_callable=io.StringIO):
             with self.assertRaises(SystemExit) as raised:
                 main()
         self.assertEqual(raised.exception.code, 1)
         report = json.loads(output.read_text())
+        self.assertEqual(json.loads((self.root / "eval_results.json").read_text()), report)
         self.assertEqual(report["completed_questions"], 2)
         self.assertEqual(report["monitoring"]["error_rate"], .5)
         self.assertEqual(report["metrics"]["expected_page_recall"], {"mean": 1.0, "samples": 1})
@@ -288,22 +290,22 @@ class ObservabilityTests(unittest.TestCase):
         self.assertNotIn("PRIVATE PASSAGE", json.dumps(report))
 
     def test_gradio_integration_and_independent_session_ids(self):
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "offline-test", "GRADIO_ANALYTICS_ENABLED": "False"}), \
-             patch("app.retrieval.Retriever", return_value=self.retriever), \
-             patch("app.answering.Answerer", return_value=self.answerer):
-            sys.modules.pop("app.app", None)
-            ui = importlib.import_module("app.app")
+        from app.ui.interface import GradioUI
         from gradio.state_holder import SessionState
-        first, second = SessionState(ui.demo), SessionState(ui.demo)
+        with patch.dict(os.environ, {"GRADIO_ANALYTICS_ENABLED": "False"}):
+            ui = GradioUI(self.answerer, self.root)
+            demo = ui.build()
+        first, second = SessionState(demo), SessionState(demo)
         self.assertNotEqual(first[ui.conversation._id], second[ui.conversation._id])
         self.assertEqual(first[ui.conversation._id], first[ui.conversation._id])
-        with patch.object(ui, "build_sources_html", return_value="sources"):
+        with patch("app.ui.interface.build_sources_html", return_value="sources"):
             answer, sources, stats, totals = ui.ask("Amount?", "browser-session", False)
         self.assertIn("100 euros", answer)
         self.assertEqual(sources, "sources")
         self.assertEqual(stats["usage"]["total_tokens"], 127)
         self.assertEqual(totals["requests"], 1)
         self.assertEqual(self.monitor.summary("other-session")["requests"], 0)
+
 
 
 if __name__ == "__main__":

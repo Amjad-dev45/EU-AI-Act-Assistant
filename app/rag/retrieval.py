@@ -8,16 +8,20 @@ import faiss
 import numpy as np
 import tiktoken
 
-from .monitoring import Monitor
+from app.monitoring import Monitor
+from app.monitoring.tracing import source_metadata
+from .reranking import MODEL as RERANK_MODEL, Reranker
 
 MODEL = "text-embedding-3-small"
 
 
 class Retriever:
-    def __init__(self, data_dir, client):
+    def __init__(self, data_dir, client, reranker=None):
         self.client = client
+        self.reranker = reranker if reranker is not None else Reranker()
         data_dir = Path(data_dir)
         self.data_dir = data_dir.resolve()
+        # Load matching chunk text, metadata, and the saved index.
         raw = (data_dir / "chunks.json").read_bytes()
         self.chunks = json.loads(raw)
         metadata = json.loads((data_dir / "index_metadata.json").read_text())
@@ -47,6 +51,7 @@ class Retriever:
                 raise
             finally:
                 monitor.save(trace)
+        # Validate the question before requesting its embedding.
         with trace.stage("query_preprocessing"):
             question = question.strip()
             trace.record["search_query"] = question
@@ -58,9 +63,11 @@ class Retriever:
             tokens = self.encoding.encode(question, disallowed_special=())
             if len(tokens) > 8191:
                 raise ValueError("Question is too long")
+        # Embed only this question; document vectors are already saved.
         response = trace.api_call("embedding_generation", "embedding", MODEL,
             lambda: self.client.embeddings.create(
                 model=MODEL, input=[question], encoding_format="float"))
+        # Search normalized vectors and restore text plus citation metadata.
         with trace.stage("retrieval"):
             vector = np.asarray([response.data[0].embedding], dtype="float32")
             if (vector.shape != (1, self.index.d)
@@ -68,7 +75,8 @@ class Retriever:
                     or np.linalg.norm(vector) == 0):
                 raise ValueError("Invalid question embedding")
             faiss.normalize_L2(vector)
-            scores, positions = self.index.search(vector, min(k, self.index.ntotal))
+            candidate_k = max(k, self.reranker.candidates) if self.reranker.enabled else k
+            scores, positions = self.index.search(vector, min(candidate_k, self.index.ntotal))
             passages = []
             for score, position in zip(scores[0], positions[0]):
                 if position < 0:
@@ -81,6 +89,18 @@ class Retriever:
                     "source_reference": chunk.get("source_url") or chunk.get("source_reference")
                         or str(self.data_dir / "sources" / chunk["source"]),
                 })
+        # Preserve the original candidate order for comparison with final evidence.
+        trace.record["retrieval_candidates"] = [source_metadata(p, rank)
+                                                for rank, p in enumerate(passages, 1)]
+        trace.record["metadata"]["reranking"] = {
+            "enabled": self.reranker.enabled,
+            "model": RERANK_MODEL if self.reranker.enabled else None,
+            "candidate_count": len(passages), "final_k": k,
+        }
+        if self.reranker.enabled:
+            with trace.stage("reranking"):
+                passages = self.reranker.rank(question, passages, k)
+        # Store metadata and return evidence to the answering/UI layer.
         trace.retrieved(passages)
         usage = trace.record["api_calls"][-1]["usage"]
         return {"question": question, "passages": passages,

@@ -10,10 +10,12 @@ from openai import OpenAI
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_DIR))
-from app.answering import Answerer
-from app.retrieval import Retriever
+from app.rag.answering import Answerer
+from app.rag.retrieval import Retriever
 
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -24,6 +26,7 @@ def main():
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--conversation-id", help="Reuse an ID to group costs across questions")
     parser.add_argument("--judge", action="store_true", help="Additional paid semantic evaluation call")
+    # Parse options before opening files or making API requests.
     args = parser.parse_args()
     if args.k < 1:
         parser.error("--k must be positive")
@@ -35,6 +38,7 @@ def main():
         question = questions[args.question_id - 1]["question"]
     if not question.strip():
         parser.error("Question cannot be empty")
+    # Load credentials only for the requested runtime operation.
     load_dotenv(REPO_DIR / ".env")
     client = OpenAI()
     answerer = Answerer(Retriever(args.data_dir, client), client)
@@ -56,5 +60,6 @@ def main():
         print("WARNING: request statistics could not be saved.", file=sys.stderr)
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()

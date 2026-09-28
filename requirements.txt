@@ -1,8 +1,10 @@
-openai
-python-dotenv
-numpy
-faiss-cpu
-tiktoken
-gradio
-pymupdf
-pillow
+# Direct runtime dependencies verified with Python 3.12.
+openai==3.19.2
+python-dotenv==1.2.3
+numpy==2.5.3
+faiss-cpu==1.15.1
+tiktoken==0.14.0
+gradio==6.28.0
+pymupdf==1.28.2
+pillow==12.3.0
+sentence-transformers==6.1.0

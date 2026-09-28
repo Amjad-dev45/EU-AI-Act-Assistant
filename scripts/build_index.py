@@ -15,6 +15,7 @@ MODEL = "text-embedding-3-small"
 BATCH_SIZE = 50
 
 
+# Cache writes are atomic so interrupted runs can reuse completed batches.
 def save_json(path, value):
     """Write through a temporary file to avoid partial cache files."""
     temporary = path.with_suffix(".tmp")
@@ -22,11 +23,14 @@ def save_json(path, value):
     temporary.replace(path)
 
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--run", action="store_true",
                         help="Generate missing embeddings and build the index")
+    # Parse options before opening files or making API requests.
     args = parser.parse_args()
     data_dir = args.data_dir.resolve()
     raw = (data_dir / "chunks.json").read_bytes()
@@ -52,17 +56,20 @@ def main():
     print(f"Chunks: {len(chunks)}")
     print(f"Total input tokens: {sum(token_counts):,}")
     print(f"Tokens without a cached batch: {pending_tokens:,}")
+    # Preview exits before credentials or an API client are loaded.
     if not args.run:
         print("Preview only. Add --run to generate embeddings.")
         return
 
     # Load the repository's .env, regardless of the working directory.
     repo_dir = Path(__file__).resolve().parents[1]
+    # Load credentials only for the requested runtime operation.
     load_dotenv(repo_dir / ".env")
     cache_dir.mkdir(parents=True, exist_ok=True)
     client = None
     embeddings = []
     billed_tokens = 0
+    # Reuse matching cached batches; embed only batches missing from disk.
     for start in range(0, len(chunks), BATCH_SIZE):
         batch = texts[start:start + BATCH_SIZE]
         cache_file = cache_dir / f"{start:06d}.json"
@@ -91,6 +98,7 @@ def main():
         embeddings.extend(cached["vectors"])
         print(f"Ready: {len(embeddings)}/{len(chunks)}")
 
+    # Normalize vectors and persist the matching index plus integrity metadata.
     vectors = np.asarray(embeddings, dtype="float32")
     faiss.normalize_L2(vectors)
     index = faiss.IndexFlatIP(vectors.shape[1])
@@ -116,5 +124,6 @@ def main():
     print(f"Saved index: {index_file}")
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()

@@ -10,7 +10,7 @@ from openai import OpenAI
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_DIR))
-from app.retrieval import Retriever
+from app.rag.retrieval import Retriever
 
 
 def check_expected_pages(passages, expected):
@@ -28,6 +28,8 @@ def check_expected_pages(passages, expected):
     }
 
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -38,6 +40,7 @@ def main():
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--json", action="store_true",
                         help="Print structured JSON instead of readable text")
+    # Parse options before opening files or making API requests.
     args = parser.parse_args()
     if args.k < 1:
         parser.error("--k must be positive")
@@ -53,6 +56,7 @@ def main():
         question = args.question
     if not question.strip():
         parser.error("Question cannot be empty")
+    # Load credentials only for the requested runtime operation.
     load_dotenv(REPO_DIR / ".env")
     retriever = Retriever(args.data_dir, OpenAI())
     result = retriever.retrieve(question, args.k)
@@ -78,5 +82,6 @@ def main():
     print(f"Embedding input tokens: {result['embedding_tokens']}")
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()

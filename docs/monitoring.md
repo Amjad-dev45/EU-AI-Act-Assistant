@@ -1,7 +1,8 @@
 # RAG evaluation and monitoring
 
 The existing pipeline remains `Retriever → Answerer → Gradio/CLI`. Instrumentation is
-implemented in `app/monitoring.py`; evaluation is in `app/evaluation.py`.
+implemented in `app/monitoring/` (usage, tracing, storage); evaluation is in
+`app/evaluation/` (local metrics and the optional judge).
 There are no new monitoring services, databases to deploy, or RAG frameworks.
 
 ## Which metrics mean what?
@@ -39,15 +40,17 @@ and judging can introduce correlated errors.
 “Used” cannot be observed inside a language model. The system logs which chunks were
 **provided in context** and which were **explicitly cited**; cited-document counts
 are the observable proxy for usage. Citations alone are never reported as proof of
-support. All current retrieved chunks enter context; this is logged explicitly so
-later reranking or context filtering can be audited.
+support. FAISS candidates are saved in `retrieval_candidates`; the final reranked chunks
+are saved in `retrieval` and enter context. Both retain cosine similarity; final
+chunks also carry `rerank_score` and their original `retrieval_rank`.
 
 ## Request record and accounting
 
 Each record has a unique request ID, conversation ID, UTC start time, outcome,
 original query, actual search query, optional rewritten query, and corpus fingerprint.
-The current application strips whitespace but does not rewrite or rerank queries:
-`rewritten_query` and unused stage timings are `null`.
+The application strips query whitespace and reranks retrieved passages locally.
+It does not rewrite queries: `rewritten_query` stays `null`. Reranking configuration
+and candidate counts are recorded in `metadata.reranking`.
 
 `api_calls` records operation, requested/returned model, response ID, latency,
 provider-reported usage, pricing snapshot and estimated cost. Usage is captured
@@ -92,8 +95,9 @@ and remains separately reported by that script.
 
 Timers use `time.perf_counter()` and store milliseconds for preprocessing,
 embedding API generation, FAISS retrieval (including vector preparation and result
-mapping), context building, LLM generation, and optional evaluation. Reranking is
-`null` because the existing app has no reranker.
+mapping), local reranking, context building, LLM generation, and optional evaluation.
+The first reranking timing includes lazy model loading/download. Disabled reranking
+has a `null` timing. Its API cost is zero; local compute is not priced.
 
 `total_latency_ms` covers the Answerer call through validation and optional evaluation,
 including orchestration overhead. It excludes SQLite persistence, PDF/image rendering,
@@ -139,7 +143,8 @@ Use the existing `questions.json` format, for example (illustrative labels only)
 
 `expected_chunks` retains the course's name but contains **source/page pairs**.
 `expected_chunk_ids` is optional and must use the exact type/value of chunk IDs in
-the current index; rechunking can invalidate those labels. Repeated source/page and
+the current index; rechunking can invalidate those labels. Null expected answers/evidence from the course dataset are treated as not applicable.
+Repeated source/page and
 chunk IDs are deduplicated. Labels must belong to the evaluated corpus version.
 `out-of-scope` and `ambiguous` infer refusal and clarification expectations when an
 explicit `expected_status` is absent. Other categories need explicit behavior labels
@@ -149,7 +154,8 @@ case-folds and compares word tokens; it does not interpret negation or paraphras
 Run `scripts/evaluate.py --data-dir data` to validate without spending. Add `--run`
 to call the existing Answerer for each question, and `--judge` for semantic estimates
 and reference correctness. `--questions`, `--limit`, `--k`, and `--output` are optional.
-Reports are written atomically after each question and include dataset/corpus hashes,
+Reports are written atomically after each question, with a latest copy at
+`data/eval_results.json`, and include dataset/corpus hashes,
 answers, retrieval metadata, timings, usage, costs, and category/difficulty scorecards
 with metric-specific sample counts. There is no invented overall correctness score.
 Errors remain in the report; the runner continues to the next question and exits
@@ -187,3 +193,5 @@ If adding rewriting, populate `rewritten_query` and `search_query`. If changing 
 selection, record only the actual included chunk/document IDs before generation.
 Non-token-priced reranking services would need their own cost adapter; none is used
 by this app.
+
+The course-named `scripts/eval_runner.py` command delegates to the same implementation as `scripts/evaluate.py`; both support the same flags. See [architecture](architecture.md) for module ownership.

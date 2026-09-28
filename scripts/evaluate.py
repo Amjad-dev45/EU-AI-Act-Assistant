@@ -12,6 +12,8 @@ sys.path.insert(0, str(REPO_DIR))
 from app.evaluation import metric_averages, validate_labels
 
 
+
+# Command-line inputs, validation, execution, and output.
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True)
@@ -21,6 +23,7 @@ def main():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--judge", action="store_true", help="Paid semantic/reference judge per answer")
     parser.add_argument("--run", action="store_true", help="Make paid embedding and chat API calls")
+    # Parse options before opening files or making API requests.
     args = parser.parse_args()
     if args.k < 1 or (args.limit is not None and args.limit < 1):
         parser.error("--k and --limit must be positive")
@@ -37,8 +40,9 @@ def main():
     # Imports/client initialization are deferred so preview needs only the standard library.
     from dotenv import load_dotenv
     from openai import OpenAI
-    from app.answering import Answerer
-    from app.retrieval import Retriever
+    from app.rag.answering import Answerer
+    from app.rag.retrieval import Retriever
+    # Load credentials only for the requested runtime operation.
     load_dotenv(REPO_DIR / ".env")
     client = OpenAI()
     answerer = Answerer(Retriever(args.data_dir, client), client)
@@ -61,6 +65,12 @@ def main():
         temporary = output.with_suffix(output.suffix + ".tmp")
         temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
         temporary.replace(output)
+        # Keep a course-compatible latest report alongside the archived run.
+        latest = args.data_dir / "eval_results.json"
+        if latest.resolve() != output.resolve():
+            latest_temp = latest.with_suffix(".json.tmp")
+            latest_temp.write_text(json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+            latest_temp.replace(latest)
     for number, label in enumerate(labels, 1):
         row = {"question_number": number, "question": label["question"],
                "category": label.get("category", "unspecified"),
@@ -87,5 +97,6 @@ def main():
         raise SystemExit(1)
 
 
+# Running this file explicitly invokes the command.
 if __name__ == "__main__":
     main()
