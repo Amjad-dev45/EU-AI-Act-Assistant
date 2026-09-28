@@ -22,6 +22,8 @@ def main():
     choices.add_argument("--question-id", type=int, help="1-based position in questions.json")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--conversation-id", help="Reuse an ID to group costs across questions")
+    parser.add_argument("--judge", action="store_true", help="Additional paid semantic evaluation call")
     args = parser.parse_args()
     if args.k < 1:
         parser.error("--k must be positive")
@@ -36,7 +38,7 @@ def main():
     load_dotenv(REPO_DIR / ".env")
     client = OpenAI()
     answerer = Answerer(Retriever(args.data_dir, client), client)
-    result = answerer.answer(question, k=args.k)
+    result = answerer.answer(question, k=args.k, conversation_id=args.conversation_id, evaluate=args.judge)
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return
@@ -46,6 +48,12 @@ def main():
         print(f"[{citation['citation_id']}] {citation['source']} — pages {pages}")
     print(f"\nStatus: {result['status']}")
     print(f"Token usage: {json.dumps(result['usage'])}")
+    print(f"Request ID: {result['telemetry']['request_id']}")
+    print(f"Conversation ID: {result['telemetry']['conversation_id']}")
+    print(f"Estimated cost: {json.dumps(result['telemetry']['cost'])}")
+    print(f"Timings (ms): {json.dumps(result['telemetry']['timings_ms'])}")
+    if not result["telemetry_persisted"]:
+        print("WARNING: request statistics could not be saved.", file=sys.stderr)
 
 
 if __name__ == "__main__":
