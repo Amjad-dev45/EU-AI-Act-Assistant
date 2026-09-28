@@ -88,8 +88,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, required=True,
                         help="Folder containing corpus.json; chunks.json is saved here")
-    parser.add_argument("--chunk-size", type=int, default=1200,
-                        help="Maximum characters per chunk (default: 1200)")
+    parser.add_argument("--chunk-size", type=int, default=1000,
+                        help="Maximum characters per chunk (default: 1000)")
     parser.add_argument("--overlap", type=int, default=200,
                         help="Shared characters between chunks (default: 200)")
     args = parser.parse_args()
