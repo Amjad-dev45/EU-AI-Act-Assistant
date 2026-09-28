@@ -50,3 +50,37 @@ The script uses `text-embedding-3-small`, batches 50 chunks per request, and cac
 Outputs are `embeddings.npy`, `my_index.faiss`, and `index_metadata.json`. Keep them with the exact matching `chunks.json`; the metadata records its SHA-256 checksum. FAISS uses normalized vectors with inner-product search, equivalent to cosine similarity. Any later retrieval code must validate the checksum and use each chunk's full `pages` list.
 
 The script reports token usage returned by successful embedding calls; check the provider dashboard for actual total spending, including any retries. Generated data stays outside Git and can be shared with teammates through Teams.
+
+
+## Inspect retrieval
+
+Test one of the team's existing evaluation questions (1-based position in questions.json):
+
+```bash
+.venv/bin/python scripts/retrieval_checker.py --data-dir ../../data --question-id 2
+```
+
+Or supply your own question:
+
+```bash
+.venv/bin/python scripts/retrieval_checker.py --data-dir ../../data --question "What AI practices are prohibited?"
+```
+
+Each execution makes one paid question-embedding request; it does not regenerate corpus embeddings or generate an answer. Use `--k 10` to inspect more passages and `--json` for structured output. Similarity scores are not confidence probabilities.
+
+The checker displays source documents, all contributing pages, passage text, and similarity scores. With `--question-id`, it reports which expected source/page pairs were found. A page match measures retrieval coverage, not whether the exact evidence was retrieved or an answer is correct. Questions without expected pages are reported as N/A.
+
+`app/retrieval.py` exposes `Retriever(data_dir, client).retrieve(question, k=5)` for use by the existing UI and later answer-generation code. Reuse the Retriever instance to avoid reloading the index for each question. It checks the saved chunks checksum and index dimensions/counts. Backend credentials must remain in the Python process, never in browser code.
+
+
+## Generate a cited answer
+
+```bash
+.venv/bin/python scripts/ask.py --data-dir ../../data --question-id 2
+```
+
+Use `--question "your question"` for free text, `--k` for retrieval count, and `--json` for structured output. Each execution makes a paid question-embedding request and a paid gpt-4o-mini generation request. The output includes the answer, citation labels mapped to source/page metadata, retrieved passages, status, and token usage.
+
+The prompt requires document-grounded answers, clarification for ambiguous questions, and refusal when evidence is insufficient. Citation validation checks reference IDs, not whether the claims are factually supported; test with the evaluation set. There is no conversation memory yet.
+
+For the existing UI, create an OpenAI client and Retriever once, then create `Answerer(retriever, client)` from `app.answering`. Call `.answer(question)` in the Python backend. Display `answer` and the `citations` list; keep the returned citation IDs (they can be nonconsecutive). Catch API errors and ValueError to display a retry/error message. Do not expose the key to the browser. UI integration is pending the location of the existing UI code.
