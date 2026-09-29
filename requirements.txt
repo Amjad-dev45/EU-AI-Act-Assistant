@@ -8,3 +8,9 @@ gradio==6.28.0
 pymupdf==1.28.2
 pillow==12.3.0
 sentence-transformers==6.1.0
+
+# Standalone agent tools
+simpleeval>=1.0.8,<2
+mcp>=1.30,<2
+requests
+jsonschema
