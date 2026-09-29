@@ -1,9 +1,12 @@
 """Standalone tools for a teammate's agent loop; no UI or model calls here."""
 
 import ast
+from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import operator
+from pathlib import Path
 
 from .messaging import MessageTool, SlackSender
 
@@ -17,15 +20,32 @@ def schema(name, description, properties=None):
 
 
 TOOL_SCHEMAS = [
-    schema("search_corpus", "Search the document corpus for evidence with source pages and citation IDs.",
+    schema("search_corpus", "Locate relevant evidence when its page is unknown. Returns source pages and citation IDs. "
+           "Use read_pages to inspect known pages or surrounding context.",
            {"query": {"type": "string"}}),
+    schema("read_pages", "Read known PDF pages from a listed corpus document, without semantic search. "
+           "Use to expand search results. Page numbers are 1-based PDF positions, not printed page labels. "
+           "Read at most 3 pages per call; long pages are explicitly marked truncated.",
+           {"source": {"type": "string"}, "start_page": {"type": "integer", "minimum": 1},
+            "end_page": {"type": "integer", "minimum": 1}}),
     schema("calculator", "Calculate arithmetic using +, -, *, /, //, %, and parentheses.",
            {"expression": {"type": "string"}}),
     schema("list_documents", "List available source documents."),
+    schema("today", "Get the current UTC date and time for questions relative to today. "
+           "Does not retrieve rules or determine whether a legal obligation applies."),
     schema("send_message", "Propose an exact message to the configured Slack channel for human approval. "
            "This does not send until a human confirms through the host application.",
            {"text": {"type": "string"}}),
 ]
+
+MAX_READ_PAGES = 3
+MAX_PAGE_CHARACTERS = 12000
+
+
+def today():
+    """Use explicit UTC so answers do not depend on the server's local timezone."""
+    now = datetime.now(timezone.utc)
+    return {"date": now.date().isoformat(), "datetime": now.isoformat(), "timezone": "UTC"}
 
 
 def calculator(expression):
@@ -85,6 +105,47 @@ class CorpusTools:
     def list_documents(self):
         return {"documents": sorted({c["source"] for c in self.retriever.chunks})}
 
+    def read_pages(self, source, start_page, end_page):
+        """Read bounded PDF evidence; allow only corpus sources within sources/."""
+        import pymupdf
+        if not isinstance(source, str) or source not in self.list_documents()["documents"]:
+            raise ValueError("Choose a source returned by list_documents")
+        if (type(start_page) is not int or type(end_page) is not int or
+                start_page < 1 or end_page < start_page or end_page - start_page >= MAX_READ_PAGES):
+            raise ValueError("Use an inclusive range of 1 to 3 pages, starting at page 1 or higher")
+        root = (Path(self.retriever.data_dir) / "sources").resolve()
+        path = (root / source).resolve()
+        if Path(source).is_absolute() or not path.is_relative_to(root) or path.suffix.lower() != ".pdf":
+            raise ValueError("Source must be a PDF within the corpus sources folder")
+        selected = []
+        with pymupdf.open(path) as document:
+            if document.needs_pass:
+                raise ValueError("Password-protected PDFs are not supported")
+            if end_page > document.page_count:
+                raise ValueError(f"Document has only {document.page_count} pages")
+            for number in range(start_page, end_page + 1):
+                text = document[number - 1].get_text("text", sort=True)
+                selected.append({"source": source, "pages": [number],
+                    "chunk_id": f"pdf-page:{number}",
+                    "document_id": hashlib.sha256(source.encode()).hexdigest(),
+                    "source_reference": str(path), "text": text[:MAX_PAGE_CHARACTERS],
+                    "score": None, "evidence_type": "pdf_page",
+                    "truncated": len(text) > MAX_PAGE_CHARACTERS,
+                    "extracted_characters": len(text),
+                    "text_status": "extracted" if text.strip() else "no_extractable_text"})
+            page_count = document.page_count
+        # Register only after all requested pages have been read successfully.
+        for item in selected:
+            key = ("pdf_page", source, item["pages"][0])
+            if key not in self._by_id:
+                item["citation_id"] = len(self.passages) + 1
+                self._by_id[key] = item
+                self.passages.append(item)
+        passages = [self._by_id[("pdf_page", source, n)] for n in range(start_page, end_page + 1)]
+        return {"source": source, "page_count": page_count, "passages": passages,
+                "truncated": any(p["truncated"] for p in passages),
+                "hint": "Pages use 1-based PDF positions. Empty text may need OCR; this tool does not perform OCR."}
+
     def send_message(self, text):
         return self._messages.propose(text)
 
@@ -95,7 +156,8 @@ class CorpusTools:
     def run_tool(self, name, arguments_json):
         """Return JSON, including recoverable errors, to the calling agent loop."""
         functions = {"search_corpus": self.search_corpus, "calculator": calculator,
-                     "list_documents": self.list_documents, "send_message": self.send_message}
+                     "list_documents": self.list_documents, "send_message": self.send_message,
+                     "read_pages": self.read_pages, "today": today}
         try:
             if name not in functions:
                 raise ValueError("Unknown tool")

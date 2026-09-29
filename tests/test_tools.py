@@ -1,13 +1,16 @@
-"""Offline tests for the four standalone tools; no paid or external calls."""
+"""Offline tests for the six standalone tools; no paid or external calls."""
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
 from app.messaging import SlackSender
-from app.tools import CorpusTools, TOOL_SCHEMAS, calculator
+from app.tools import CorpusTools, TOOL_SCHEMAS, calculator, today
 
 
 class ToolTests(unittest.TestCase):
@@ -43,7 +46,73 @@ class ToolTests(unittest.TestCase):
                 ("approve_message", '{"approved":true}')]:
             self.assertIn("error", json.loads(self.tools.run_tool(name, arguments)))
         self.assertEqual({t["function"]["name"] for t in TOOL_SCHEMAS},
-                         {"search_corpus", "calculator", "list_documents", "send_message"})
+                         {"search_corpus", "calculator", "list_documents", "send_message", "read_pages", "today"})
+
+    def make_pdf(self):
+        import pymupdf
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.retriever.data_dir = Path(temporary.name)
+        sources = self.retriever.data_dir / "sources"
+        sources.mkdir()
+        with pymupdf.open() as document:
+            document.new_page().insert_text((72, 72), "First page evidence")
+            document.new_page().insert_text((72, 72), "Second page exceptions")
+            document.new_page()  # No extractable text.
+            document.new_page().insert_text((72, 72), "Fourth page")
+            document.save(sources / "a.pdf")
+
+    def test_read_pages_real_pdf_and_shared_citations(self):
+        self.make_pdf()
+        self.retriever.retrieve.return_value = {"passages": [
+            {"source": "a.pdf", "chunk_id": 0, "pages": [1], "text": "First", "score": .9}]}
+        self.tools.search_corpus("evidence")
+        result = json.loads(self.tools.run_tool("read_pages", '{"source":"a.pdf","start_page":1,"end_page":2}'))
+        self.assertEqual(result["page_count"], 4)
+        self.assertEqual([p["citation_id"] for p in result["passages"]], [2, 3])
+        self.assertIn("First page evidence", result["passages"][0]["text"])
+        self.assertEqual(result["passages"][1]["pages"], [2])
+        self.assertIsNone(result["passages"][0]["score"])
+        self.assertFalse(result["truncated"])
+        self.assertEqual(self.tools.read_pages("a.pdf", 2, 2)["passages"][0]["citation_id"], 3)
+        self.assertEqual(len(self.tools.passages), 3)
+        self.assertEqual(self.retriever.retrieve.call_count, 1)
+
+    def test_read_pages_empty_text_and_truncation(self):
+        self.make_pdf()
+        empty = self.tools.read_pages("a.pdf", 3, 3)["passages"][0]
+        self.assertEqual(empty["text_status"], "no_extractable_text")
+        with patch("app.tools.MAX_PAGE_CHARACTERS", 5):
+            result = self.tools.read_pages("a.pdf", 1, 1)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(len(result["passages"][0]["text"]), 5)
+        self.assertGreater(result["passages"][0]["extracted_characters"], 5)
+        self.retriever.retrieve.assert_not_called()
+
+    def test_read_pages_rejects_invalid_ranges_and_paths(self):
+        self.make_pdf()
+        for start, end in [(0, 1), (2, 1), (1, 4), (4, 5), (True, 2), (1, 1.5)]:
+            with self.subTest(start=start, end=end), self.assertRaises(ValueError):
+                self.tools.read_pages("a.pdf", start, end)
+        for source in ["unknown.pdf", "../outside.pdf", str(self.retriever.data_dir / "outside.pdf"), "notes.txt"]:
+            if source != "unknown.pdf":
+                self.retriever.chunks.append({"source": source})
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                self.tools.read_pages(source, 1, 1)
+        self.assertEqual(self.tools.passages, [])
+
+    def test_today_is_utc_and_uses_one_clock_read(self):
+        instant = datetime(2030, 1, 1, 0, 1, tzinfo=timezone.utc)
+        with patch("app.tools.datetime") as clock:
+            clock.now.return_value = instant
+            result = json.loads(self.tools.run_tool("today", "{}"))
+            clock.now.assert_called_once_with(timezone.utc)
+        self.assertEqual(result, {"date": "2030-01-01", "datetime": instant.isoformat(), "timezone": "UTC"})
+        before = datetime.now(timezone.utc)
+        live = today()
+        after = datetime.now(timezone.utc)
+        self.assertTrue(before <= datetime.fromisoformat(live["datetime"]) <= after)
+        self.retriever.retrieve.assert_not_called()
 
     def test_send_requires_approval_and_is_one_shot(self):
         proposal = self.tools.send_message("Exact answer [1]\n[1] a.pdf, pages 1, 2")

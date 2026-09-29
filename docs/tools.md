@@ -1,6 +1,6 @@
 # Tool contribution
 
-This contribution contains only the four tools and their function-calling schemas.
+This contribution contains only the six tools and their function-calling schemas.
 The existing RAG UI, answer pipeline, evaluation scripts and monitoring are unchanged.
 Your teammates can connect these tools to their agent loop and approval UI.
 
@@ -30,11 +30,30 @@ result_json = toolbox.run_tool(call.function.name, call.function.arguments)
 - `calculator(expression)` evaluates bounded numeric arithmetic through `simpleeval`.
   Code execution, function calls, powers, strings and bitwise operations are excluded.
 - `list_documents()` returns sorted, distinct source names from the loaded chunks.
+- `read_pages(source, start_page, end_page)` reads an inclusive range of up to three
+  pages from a known corpus PDF under `data_dir/sources/`. Page numbers are 1-based
+  PDF positions, not printed labels. It performs no search or embedding calls.
+  Each page returns source metadata and a stable citation ID in `toolbox.passages`,
+  shared with search evidence. Page evidence has `evidence_type=pdf_page` and
+  `score=None`: it has no similarity score. Hosts aggregating scores must exclude
+  these null scores. Each page is capped at 12,000 characters with explicit
+  `truncated` and `extracted_characters` fields. Blank/scanned pages report
+  `text_status=no_extractable_text`; OCR is not performed. Unsupported sources,
+  escaping paths, and invalid page ranges are rejected.
+- `today()` returns the live UTC date, timezone and timestamp. UTC is explicit;
+  it may differ from the user's local calendar date near midnight. It does not
+  determine legal applicability or calculate deadlines.
 - `send_message(text)` returns an exact Slack message proposal. Include any source
   references in `text`; it is sent unchanged after approval.
 
 `run_tool` returns recoverable JSON errors, without exposing provider exception text.
 The caller owns the agent loop, model calls, step limits, trajectory logging and UI.
+
+To avoid overlap, use search to **locate** evidence and read_pages to **inspect**
+known pages. For example, after a search returns page 8 of a source, call
+`read_pages` with that exact source name, `start_page=8`, `end_page=9` (if present).
+Use `today` only when the question needs the current date. Both new tools run
+locally using the standard library and the existing PyMuPDF dependency.
 
 ## Send-message approval and setup
 
