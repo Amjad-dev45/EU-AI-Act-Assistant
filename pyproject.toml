@@ -1,0 +1,26 @@
+[project]
+name = "team67"
+version = "0.1.0"
+description = "Challenge Week corpus processing, RAG, and service scaffold"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+# Local scripts and Docker images select packages from this single configuration.
+[dependency-groups]
+rag = ["openai", "python-dotenv", "numpy", "faiss-cpu", "sentence-transformers>=6.1,<7", "torch", "rank-bm25>=0.2.2,<0.3"]
+extraction = ["pymupdf==1.28.2"]
+ui = ["gradio>=5,<7"]
+agent = ["openai", "python-dotenv", "simpleeval>=1,<2"]
+
+[tool.uv]
+package = false
+default-groups = ["rag", "extraction"]
+
+# The small reranker runs on CPU; avoid downloading CUDA libraries on Linux/Windows.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

@@ -45,20 +45,36 @@ def _text(body: dict, field: str, required: bool = True, max_chars: int = MAX_ME
     return value
 
 
+def injection_test_flag(body):
+    value = body.get("injection_test", False)
+    if type(value) is not bool:
+        raise _bad("`injection_test` must be a boolean.")
+    return value
+
+
 def validate_chat(body) -> dict:
     body = _require_object(body)
     validate_request_id(body)
     _text(body, "message")
-    # NOTE: `demo_tool` membership is checked by the Agent router so that an
-    # unknown selector is recorded as a (failed) request rather than dropped.
-    _text(body, "demo_tool", max_chars=64)
-    return body
+    history = body.get("history", [])
+    if not isinstance(history, list) or len(history) > 6:
+        raise _bad("`history` must contain at most 6 messages.")
+    clean = []
+    for message in history:
+        if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
+            raise _bad("History roles must be user or assistant.")
+        content = _text(message, "content", max_chars=12000)
+        clean.append({"role": message["role"], "content": content})
+    if sum(len(message["content"]) for message in clean) > 24000:
+        raise _bad("History is longer than 24000 characters; start a new chat.")
+    return {"request_id": body["request_id"], "message": body["message"], "history": clean, "injection_test": injection_test_flag(body)}
 
 
 def validate_search(body) -> dict:
     body = _require_object(body)
     validate_request_id(body)
     _text(body, "query")
+    injection_test_flag(body)
     k = body.get("k", 3)
     if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= MAX_K:
         raise _bad(f"`k` must be an integer between 1 and {MAX_K}.")
@@ -90,7 +106,7 @@ def validate_service_event(body) -> dict:
 
 
 def zero_usage() -> dict:
-    """Tokens and external cost are always zero in this scaffold."""
+    """Initialize usage before any model or tool calls."""
     return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "external_cost_usd": 0.0}
 
 

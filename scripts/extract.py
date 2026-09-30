@@ -1,7 +1,3 @@
-# /// script
-# requires-python = "==3.12.*"
-# dependencies = ["pymupdf==1.28.2"]
-# ///
 """Extract the course corpus. Run from the repo: uv run scripts/extract.py."""
 
 import argparse

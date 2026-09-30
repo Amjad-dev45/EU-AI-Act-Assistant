@@ -1,50 +1,77 @@
-"""PLACEHOLDER (Person 1): Gradio UI. The browser only talks to this server;
-this server calls the Agent by service name (AGENT_URL)."""
+"""Gradio chat: browser → UI → Agent; the UI never calls RAG or a model directly."""
+
 import os
-import time
 
-import gradio as gr
-
-from contracts.errors import ApiError
-from contracts.httpkit import call_json
-from contracts.schemas import new_request_id
-
-AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8001")
-# Must be larger than the Agent's own RAG timeout, so the Agent can report first.
-TIMEOUT_S = float(os.environ.get("UI_TIMEOUT_S", "8"))
+from .chat import new_chat, ping, submit_chat
+from .tool_calls import TOOL_CSS, format_tool_calls
+from .context_usage import CONTEXT_CSS, format_context
+from .rag_demo import RAG_CSS, format_rag_demo
+from .demo_guide import DEMO_GUIDE, DEMO_QUESTIONS
 
 
-def ping(message: str, forward: bool):
-    """Send a message UI -> Agent (-> RAG) and show every hop."""
-    rid = new_request_id("ping")
-    started = time.perf_counter()
-    try:
-        status, body = call_json("POST", f"{AGENT_URL}/v1/ping",
-                                 {"request_id": rid, "message": message or "hello", "forward": forward},
-                                 TIMEOUT_S, "agent")
-    except ApiError as e:  # Agent itself is unreachable / too slow
-        status, body = e.status, {"ok": False, "error": {"code": e.code, "message": e.message},
-                                  "chain": [{"service": "agent", "status": "error", "error": e.code}]}
-    ms = round((time.perf_counter() - started) * 1000, 2)
-    body["chain"] = [{"service": "ui", "status": "ok"}] + body.get("chain", [])
-    body["round_trip_ms"] = ms
-    ok = status == 200 and body.get("ok")
-    hops = " → ".join(f"{h['service']} {'✅' if h['status'] == 'ok' else '❌'}" for h in body["chain"])
-    summary = f"{'✅ OK' if ok else '❌ FAILED'} in {ms} ms\n\n{hops}"
-    if not ok and "error" in body:
-        summary += f"\n\n`{body['error']['code']}`: {body['error']['message']}"
-    return summary, body
+def create_app():
+    """Build the screen without starting a server or making service calls."""
+    import gradio as gr
 
-
-def main() -> None:
-    with gr.Blocks(title="Scaffold UI") as demo:
-        gr.Markdown(f"# Scaffold UI\nContainer connectivity test. Agent at `{AGENT_URL}`.")
-        msg = gr.Textbox(label="Message", value="hello from the UI")
+    with gr.Blocks(title="EU AI Act Assistant") as demo:
+        gr.Markdown("# EU AI Act Assistant\nAsk about the corpus, then ask follow-up questions.")
+        state = gr.State({"history": [], "display": []})
         with gr.Row():
-            b1 = gr.Button("Ping Agent (UI → Agent)")
-            b2 = gr.Button("Ping Agent → RAG (UI → Agent → RAG)", variant="primary")
-        summary = gr.Markdown()
-        raw = gr.JSON(label="Raw response")
-        b1.click(lambda m: ping(m, False), msg, [summary, raw], api_name="ping_agent")
-        b2.click(lambda m: ping(m, True), msg, [summary, raw], api_name="ping_chain")
-    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("UI_PORT", "7860")))
+            with gr.Column(scale=2):
+                conversation = gr.Chatbot(label="Conversation", height=520,
+                                          buttons=["copy"], sanitize_html=True)
+                context_bar = gr.HTML(format_context(), css_template=CONTEXT_CSS,
+                                      elem_id="context-usage", js_on_load=None)
+                message = gr.Textbox(label="Your question", lines=2,
+                                     placeholder="What obligations does Article 4 introduce?")
+                injection_test = gr.Checkbox(value=False, label="Injection test (demo only)",
+                                             info="Adds a temporary malicious source to FAISS + BM25 for this request; the saved corpus stays unchanged.")
+                with gr.Row():
+                    send = gr.Button("Send", variant="primary")
+                    clear = gr.Button("New chat")
+                status = gr.Markdown("Remembers up to three recent exchanges in this tab.")
+            with gr.Column(scale=1):
+                gr.Markdown("### Sources")
+                sources = gr.Markdown("Sources will appear here.")
+                gr.Markdown("### Tool calls")
+                trajectory = gr.HTML(format_tool_calls([]), css_template=TOOL_CSS,
+                                     elem_id="tool-calls", js_on_load=None)
+                with gr.Accordion("Full results and usage", open=False):
+                    details = gr.JSON(label="Latest response")
+
+        with gr.Tabs():
+            with gr.Tab("RAG walkthrough"):
+                rag_walkthrough = gr.HTML(format_rag_demo([]), css_template=RAG_CSS,
+                                          elem_id="rag-walkthrough", js_on_load=None)
+            with gr.Tab("Demo guide"):
+                gr.Examples(examples=DEMO_QUESTIONS, inputs=message,
+                            label="Existing benchmark questions — select, then Send")
+                gr.Markdown(DEMO_GUIDE)
+
+        with gr.Accordion("Full retrieval details", open=False):
+            retrieval_details = gr.Markdown()
+
+        outputs = [message, conversation, state, status, sources, trajectory, details, retrieval_details, context_bar, rag_walkthrough]
+        # One shared event prevents enter/click double submission. Reset uses the
+        # same queue so an in-flight answer cannot repopulate a cleared chat.
+        gr.on([message.submit, send.click], submit_chat, [message, state, injection_test], outputs,
+              trigger_mode="once", concurrency_limit=1, concurrency_id="chat",
+              api_name="chat", show_progress="full")
+        clear.click(lambda: (*new_chat(), False), None, [*outputs, injection_test], trigger_mode="once",
+                    concurrency_limit=1, concurrency_id="chat", api_name="new_chat")
+
+        with gr.Accordion("Connection check", open=False):
+            connection = gr.Button("Check connection")
+            connection_status = gr.Markdown()
+            connection.click(ping, None, connection_status, api_name="connection_check")
+
+    return demo.queue(default_concurrency_limit=1)
+
+
+def main():
+    create_app().launch(server_name="0.0.0.0",
+                        server_port=int(os.environ.get("UI_PORT", "7860")))
+
+
+if __name__ == "__main__":
+    main()

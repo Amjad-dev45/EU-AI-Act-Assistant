@@ -1,5 +1,7 @@
 .env
 .env.scaffold
+envvv
+.env.*
 data/
 logs/
 .venv/

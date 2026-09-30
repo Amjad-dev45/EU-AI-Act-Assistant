@@ -1,10 +1,11 @@
-"""PLACEHOLDER (Person 3): Agent API. Add /v1/chat and /v1/metrics next to /v1/ping."""
+"""Agent API: bounded model/tool chat plus independent connectivity routes."""
 import os
 import time
 
 from contracts.errors import ApiError, BAD_GATEWAY
 from contracts.httpkit import call_json, serve_forever
 from contracts.schemas import validate_ping
+from .loop import run_agent
 
 RAG_URL = os.environ.get("RAG_URL", "http://rag:8002")
 RAG_TIMEOUT_S = float(os.environ.get("RAG_TIMEOUT_S", "3"))
@@ -38,6 +39,7 @@ def ping(body):
 ROUTES = {
     ("GET", "/health"): health,
     ("POST", "/v1/ping"): ping,  # connectivity test
+    ("POST", "/v1/chat"): lambda body: (200, run_agent(body)),
 }
 
 

@@ -1,27 +1,22 @@
-"""PERSON 2: embedding/index/search foundations.
+"""Serialized access to the existing hybrid retrieval and answer pipelines."""
 
-Replace `search_chunks` with real retrieval (embedding + FAISS) later. Keep the
-returned hit shape: {"chunk_id","document_id","pages","text","score"}, best first.
-"""
-import re
+from threading import RLock
 
 
-def _tokens(text: str) -> set[str]:
-    return set(re.findall(r"[a-z0-9]+", text.lower()))
+# Both HTTP entry points share one lock for the reranker and embedding cache.
+PIPELINE_LOCK = RLock()
 
 
-def search_chunks(chunks: list[dict], query: str, k: int) -> list[dict]:
-    """Deterministic mock: score = share of query words found in the chunk.
-    Ties keep fixture order, so the same query always returns the same hits."""
-    q = _tokens(query)
-    scored = []
-    for order, chunk in enumerate(chunks):
-        overlap = len(q & _tokens(chunk["text"]))
-        score = round(overlap / len(q), 4) if q else 0.0
-        scored.append((-score, order, chunk, score))
-    scored.sort(key=lambda row: (row[0], row[1]))
-    return [
-        {"chunk_id": c["chunk_id"], "document_id": c["document_id"],
-         "pages": c["pages"], "text": c["text"], "score": s}
-        for _, _, c, s in scored[:k]
-    ]
+def search_chunks(data_dir, query: str, k: int = 3, *, injection_test=False) -> dict:
+    from .retrieval import retrieve
+
+    with PIPELINE_LOCK:
+        return retrieve(query, data_dir, k=k, **({"injection_test": True} if injection_test else {}))
+
+
+def answer_query(data_dir, query: str, client=None, min_rerank_score=None, *, injection_test=False) -> dict:
+    from .answering import answer_question
+
+    with PIPELINE_LOCK:
+        return answer_question(query, data_dir, client=client, min_rerank_score=min_rerank_score,
+                               **({"injection_test": True} if injection_test else {}))

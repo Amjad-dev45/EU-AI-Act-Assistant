@@ -17,7 +17,7 @@ from .errors import (
 )
 from .schemas import new_request_id
 
-MAX_BODY_BYTES = 64 * 1024
+MAX_BODY_BYTES = 128 * 1024
 
 
 def log(service: str, message: str) -> None:
@@ -38,7 +38,7 @@ def make_server(service: str, routes: dict, host: str, port: int) -> ThreadingHT
 
         def _send(self, status: int, payload: dict, request_id: str | None) -> None:
             payload.setdefault("request_id", request_id or new_request_id("srv"))
-            payload.setdefault("mock", True)
+            payload.setdefault("mock", False)
             data = json.dumps(payload).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -58,7 +58,12 @@ def make_server(service: str, routes: dict, host: str, port: int) -> ThreadingHT
                     raise ApiError(405, METHOD_NOT_ALLOWED, f"{method} not allowed on {path}.")
                 body = None
                 if method == "POST":
-                    length = int(self.headers.get("Content-Length") or 0)
+                    try:
+                        length = int(self.headers.get("Content-Length") or 0)
+                    except ValueError:
+                        raise ApiError(400, INVALID_REQUEST, "Invalid Content-Length.")
+                    if length < 0:
+                        raise ApiError(400, INVALID_REQUEST, "Invalid Content-Length.")
                     if length > MAX_BODY_BYTES:
                         raise ApiError(413, PAYLOAD_TOO_LARGE, "Request body too large.")
                     raw = self.rfile.read(length) if length else b""
@@ -75,7 +80,7 @@ def make_server(service: str, routes: dict, host: str, port: int) -> ThreadingHT
                 status = e.status
                 payload = {**e.extra, "error": {"code": e.code, "message": e.message}}
             except Exception as e:  # never leak a stack trace to the caller
-                log(service, f"unhandled error: {e!r}")
+                log(service, f"unhandled error: {type(e).__name__}")
                 status = 500
                 payload = {"error": {"code": INTERNAL_ERROR, "message": "Unexpected server error."}}
             self._send(status, payload, request_id)

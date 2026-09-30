@@ -1,7 +1,5 @@
-# Docker Compose scaffold. Start: docker compose up --build
-# Only SCAFFOLD_* variables are interpolated, so a real .env is never forwarded.
-# No depends_on on purpose: UI must start without Agent, Agent without RAG.
-
+# UI -> Agent -> RAG. Only the UI is published to the host.
+# The existing .env supplies the API key to Agent and RAG only.
 x-rag-build: &rag-build
   context: .
   dockerfile: docker/Dockerfile.rag
@@ -9,31 +7,33 @@ x-rag-build: &rag-build
 services:
   ui:
     build: { context: ., dockerfile: docker/Dockerfile.ui }
-    image: team67-scaffold-ui
+    image: team67-ui
     environment:
       AGENT_URL: http://agent:8001
       UI_PORT: "7860"
-      UI_TIMEOUT_S: ${SCAFFOLD_UI_TIMEOUT_S:-8}
+      UI_TIMEOUT_S: ${UI_TIMEOUT_S:-300}
       GRADIO_ANALYTICS_ENABLED: "False"
     ports:
-      - "127.0.0.1:${SCAFFOLD_UI_PORT:-7860}:7860"   # the only published port
+      - "127.0.0.1:${SCAFFOLD_UI_PORT:-7860}:7860"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:7860/', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 20s
 
   agent:
     build: { context: ., dockerfile: docker/Dockerfile.agent }
-    image: team67-scaffold-agent
+    image: team67-agent
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       AGENT_PORT: "8001"
       RAG_URL: http://rag:8002
-      RAG_TIMEOUT_S: ${SCAFFOLD_RAG_TIMEOUT_S:-3}
-      AGENT_DB_PATH: /logs/scaffold-demo/scaffold.sqlite3
+      RAG_TIMEOUT_S: ${RAG_TIMEOUT_S:-90}
+      AGENT_LOG_DIR: /logs/agent_runs
     volumes:
-      - ./logs/scaffold-demo:/logs/scaffold-demo      # Agent alone owns the DB
+      - ./logs:/logs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
       interval: 10s
@@ -43,13 +43,17 @@ services:
 
   rag:
     build: *rag-build
-    image: team67-scaffold-rag
+    image: team67-rag
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       RAG_PORT: "8002"
-      RAG_DATA_DIR: /data/scaffold-demo
-      AGENT_URL: http://agent:8001                    # best-effort metrics reporting only
+      RAG_DATA_DIR: /data
+      RAG_MIN_RERANK_SCORE: ${RAG_MIN_RERANK_SCORE:--5.0}
+      HF_HOME: /models/huggingface
     volumes:
-      - ./data/scaffold-demo:/data/scaffold-demo:ro   # read prepared artifacts
+      - ./data:/data  # retrieval writes only new query embeddings to its cache
+      - rag-models:/models/huggingface
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8002/health', timeout=3)"]
       interval: 10s
@@ -57,13 +61,16 @@ services:
       retries: 5
       start_period: 5s
 
-  # Optional job: docker compose run --rm prepare   (never started by `up`)
+  # Historical fixture generator, never started with the real application.
   prepare:
     build: *rag-build
-    image: team67-scaffold-rag                        # same image as rag
+    image: team67-rag
     profiles: ["tools"]
     command: ["python", "/srv/scripts/scaffold_prepare.py"]
     environment:
       RAG_DATA_DIR: /data/scaffold-demo
     volumes:
-      - ./data/scaffold-demo:/data/scaffold-demo      # write access
+      - ./data/scaffold-demo:/data/scaffold-demo
+
+volumes:
+  rag-models:

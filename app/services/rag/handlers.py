@@ -1,66 +1,114 @@
-"""PERSON 2: RAG API business logic (transport lives in server.py).
+"""Production RAG HTTP handlers, reusing the evaluated answer pipeline."""
 
-Imports Person 1's quote module. Each request reports its own service-side timing
-to the Agent's monitor (best effort: RAG never depends on the Agent to answer).
-"""
+import math
 import os
 import time
 
-from contracts.errors import ApiError
-from contracts.httpkit import fire_and_forget
-from contracts.schemas import validate_quote, validate_search
+from contracts.errors import ApiError, DEPENDENCY_UNAVAILABLE
+from contracts.schemas import validate_ping, validate_quote, validate_search
 
 from . import store
+from .client import create_client
 from .quote import find_quote
-from .search import search_chunks
-
-AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8001")
+from .search import answer_query, search_chunks
 
 
-def _report(request_id: str, endpoint: str, status: int, started: float) -> None:
-    fire_and_forget(f"{AGENT_URL}/v1/internal/service-events", {
-        "request_id": request_id, "service": "rag", "endpoint": endpoint,
-        "status_code": status, "duration_ms": round((time.perf_counter() - started) * 1000, 3),
-    })
+class _AnswerClient:
+    """Create the bounded chat client only if generation is actually needed."""
+
+    def __init__(self):
+        self._client = None
+
+    @property
+    def chat(self):
+        if self._client is None:
+            self._client = create_client().with_options(timeout=45, max_retries=0)
+        return self._client.chat
+
+    def close(self):
+        if self._client is not None:
+            self._client.close()
 
 
-def _timed(endpoint: str, body, work):
+def _run(work):
     started = time.perf_counter()
-    rid = body.get("request_id") if isinstance(body, dict) else None
     try:
         result = work()
-    except ApiError as e:
-        if rid:
-            _report(rid, endpoint, e.status, started)
+    except ApiError:
         raise
-    _report(rid, endpoint, 200, started)
+    except Exception:
+        # Provider errors may contain credentials or request bodies.
+        raise ApiError(503, DEPENDENCY_UNAVAILABLE,
+                       "RAG could not complete the request. Check the prepared data and model-provider configuration.") from None
+    result["duration_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    result["mock"] = False
     return 200, result
 
 
 def health(_body):
-    # Measures only this service: no calls to other containers.
-    return 200, {"status": "ok", "service": "rag"}
+    return 200, {"status": "ok", "service": "rag", "mock": False}
+
+
+def _minimum_score():
+    value = float(os.environ.get("RAG_MIN_RERANK_SCORE", "-5.0"))
+    if not math.isfinite(value):
+        raise ValueError("Invalid relevance threshold")
+    return value
 
 
 def search(body):
+    req = validate_search(body)
+
     def work():
-        req = validate_search(body)
-        source, chunks = store.load_chunks()
-        return {"request_id": req["request_id"], "chunk_source": source,
-                "hits": search_chunks(chunks, req["query"], req["k"])}
-    return _timed("/v1/search", body, work)
+        threshold = _minimum_score()
+        retrieval = search_chunks(store.DATA_DIR, req["query"], req["k"],
+                                  **({"injection_test": True} if req.get("injection_test") else {}))
+        hits = retrieval["hits"]
+        score = hits[0].get("rerank_score") if hits else None
+        below_threshold = score is not None and score < threshold
+        return {"request_id": req["request_id"], "chunk_source": "prepared",
+                "hits": [] if below_threshold else hits,
+                "status": "refused" if below_threshold or not hits else "ok",
+                "refusal_reason": "low_relevance" if below_threshold else None,
+                "retrieval": {**{key: value for key, value in retrieval.items() if key not in {"hits", "vector_hits"}},
+                              "top_rerank_score": score, "min_rerank_score": threshold}}
+
+    return _run(work)
+
+
+def answer(body):
+    req = validate_search(body)
+
+    def work():
+        client = _AnswerClient()
+        threshold = _minimum_score()
+        try:
+            result = answer_query(store.DATA_DIR, req["query"], client=client,
+                                  min_rerank_score=threshold,
+                                  **({"injection_test": True} if req.get("injection_test") else {}))
+        finally:
+            client.close()
+        context = result.get("answer_context", {})
+        retrieval = result.get("retrieval", {})
+        return {
+            "request_id": req["request_id"],
+            "grounded_answer": {key: value for key, value in result.items()
+                                if key not in {"answer_context", "retrieval"}},
+            "hits": context.get("hits", []),
+            "context": {key: value for key, value in context.items() if key != "hits"},
+            "retrieval": {**{key: value for key, value in retrieval.items() if key not in {"hits", "vector_hits"}},
+                          "min_rerank_score": threshold, "top_rerank_score": result.get("top_rerank_score")},
+        }
+
+    return _run(work)
 
 
 def quote(body):
-    def work():
-        req = validate_quote(body)
-        found = find_quote(store.load_source(), req["document_id"], req["page"], req.get("phrase"))
-        return {"request_id": req["request_id"], **found}
-    return _timed("/v1/quote", body, work)
+    req = validate_quote(body)
+    return _run(lambda: {"request_id": req["request_id"],
+                         **find_quote(store.load_source(), req["document_id"], req["page"], req.get("phrase"))})
 
 
 def ping(body):
-    """Connectivity test: echo the message back. No data access."""
-    from contracts.schemas import validate_ping
     req = validate_ping(body)
-    return 200, {"request_id": req["request_id"], "service": "rag", "echo": req["message"]}
+    return 200, {"request_id": req["request_id"], "service": "rag", "echo": req["message"], "mock": False}

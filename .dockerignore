@@ -1,6 +1,7 @@
 .git
 .gitignore
 .env
+envvv
 .env.*
 !.env.scaffold.example
 *.pem
