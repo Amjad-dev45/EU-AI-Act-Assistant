@@ -1,0 +1,69 @@
+# Docker Compose scaffold. Start: docker compose up --build
+# Only SCAFFOLD_* variables are interpolated, so a real .env is never forwarded.
+# No depends_on on purpose: UI must start without Agent, Agent without RAG.
+
+x-rag-build: &rag-build
+  context: .
+  dockerfile: docker/Dockerfile.rag
+
+services:
+  ui:
+    build: { context: ., dockerfile: docker/Dockerfile.ui }
+    image: team67-scaffold-ui
+    environment:
+      AGENT_URL: http://agent:8001
+      UI_PORT: "7860"
+      UI_TIMEOUT_S: ${SCAFFOLD_UI_TIMEOUT_S:-8}
+      GRADIO_ANALYTICS_ENABLED: "False"
+    ports:
+      - "127.0.0.1:${SCAFFOLD_UI_PORT:-7860}:7860"   # the only published port
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:7860/', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  agent:
+    build: { context: ., dockerfile: docker/Dockerfile.agent }
+    image: team67-scaffold-agent
+    environment:
+      AGENT_PORT: "8001"
+      RAG_URL: http://rag:8002
+      RAG_TIMEOUT_S: ${SCAFFOLD_RAG_TIMEOUT_S:-3}
+      AGENT_DB_PATH: /logs/scaffold-demo/scaffold.sqlite3
+    volumes:
+      - ./logs/scaffold-demo:/logs/scaffold-demo      # Agent alone owns the DB
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8001/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  rag:
+    build: *rag-build
+    image: team67-scaffold-rag
+    environment:
+      RAG_PORT: "8002"
+      RAG_DATA_DIR: /data/scaffold-demo
+      AGENT_URL: http://agent:8001                    # best-effort metrics reporting only
+    volumes:
+      - ./data/scaffold-demo:/data/scaffold-demo:ro   # read prepared artifacts
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8002/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # Optional job: docker compose run --rm prepare   (never started by `up`)
+  prepare:
+    build: *rag-build
+    image: team67-scaffold-rag                        # same image as rag
+    profiles: ["tools"]
+    command: ["python", "/srv/scripts/scaffold_prepare.py"]
+    environment:
+      RAG_DATA_DIR: /data/scaffold-demo
+    volumes:
+      - ./data/scaffold-demo:/data/scaffold-demo      # write access

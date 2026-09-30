@@ -1,0 +1,14 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.scaffold.example
+*.pem
+*.key
+data/
+logs/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc

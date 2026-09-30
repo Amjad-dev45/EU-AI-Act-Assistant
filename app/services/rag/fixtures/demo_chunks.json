@@ -1,0 +1,70 @@
+{
+  "mock": true,
+  "note": "Committed mock chunks generated from demo_source.json",
+  "chunks": [
+    {
+      "chunk_id": "demo-handbook:p1:c0",
+      "document_id": "demo-handbook",
+      "pages": [
+        1
+      ],
+      "text": "Northwind Demo Handbook. This synthetic document exists only to test the Docker scaffold."
+    },
+    {
+      "chunk_id": "demo-handbook:p1:c1",
+      "document_id": "demo-handbook",
+      "pages": [
+        1
+      ],
+      "text": "The demo office opens at 09:00 and closes at 17:00 on weekdays."
+    },
+    {
+      "chunk_id": "demo-handbook:p2:c0",
+      "document_id": "demo-handbook",
+      "pages": [
+        2
+      ],
+      "text": "Visitors must register at the front desk and wear a visitor badge at all times."
+    },
+    {
+      "chunk_id": "demo-handbook:p2:c1",
+      "document_id": "demo-handbook",
+      "pages": [
+        2
+      ],
+      "text": "The demo cafeteria serves lunch between 12:00 and 14:00."
+    },
+    {
+      "chunk_id": "demo-safety:p1:c0",
+      "document_id": "demo-safety",
+      "pages": [
+        1
+      ],
+      "text": "In case of a demo fire alarm, leave the building through the nearest marked exit."
+    },
+    {
+      "chunk_id": "demo-safety:p1:c1",
+      "document_id": "demo-safety",
+      "pages": [
+        1
+      ],
+      "text": "Do not use the demo elevators during an alarm."
+    },
+    {
+      "chunk_id": "demo-safety:p3:c0",
+      "document_id": "demo-safety",
+      "pages": [
+        3
+      ],
+      "text": "The assembly point is the blue bench in the demo courtyard."
+    },
+    {
+      "chunk_id": "demo-safety:p3:c1",
+      "document_id": "demo-safety",
+      "pages": [
+        3
+      ],
+      "text": "Report to the demo safety officer once everyone is outside."
+    }
+  ]
+}

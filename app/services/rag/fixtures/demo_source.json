@@ -1,0 +1,34 @@
+{
+  "synthetic": true,
+  "note": "Invented demo text for the Docker scaffold. Not part of the course corpus or evaluation questions.",
+  "documents": [
+    {
+      "document_id": "demo-handbook",
+      "title": "Northwind Demo Handbook (synthetic)",
+      "pages": [
+        {
+          "page": 1,
+          "text": "Northwind Demo Handbook. This synthetic document exists only to test the Docker scaffold.\n\nThe demo office opens at 09:00 and closes at 17:00 on weekdays."
+        },
+        {
+          "page": 2,
+          "text": "Visitors must register at the front desk and wear a visitor badge at all times.\n\nThe demo cafeteria serves lunch between 12:00 and 14:00."
+        }
+      ]
+    },
+    {
+      "document_id": "demo-safety",
+      "title": "Northwind Demo Safety Guide (synthetic)",
+      "pages": [
+        {
+          "page": 1,
+          "text": "In case of a demo fire alarm, leave the building through the nearest marked exit.\n\nDo not use the demo elevators during an alarm."
+        },
+        {
+          "page": 3,
+          "text": "The assembly point is the blue bench in the demo courtyard.\n\nReport to the demo safety officer once everyone is outside."
+        }
+      ]
+    }
+  ]
+}

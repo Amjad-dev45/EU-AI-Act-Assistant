@@ -1,28 +1,12 @@
-# Credentials and local environments
 .env
-.env.*
-!.env.example
+.env.scaffold
+data/
+logs/
 .venv/
-venv/
-
-# Local documents, indexes, and request logs
-/data/
-/logs/
-
-# Python and development caches
 __pycache__/
-*.py[cod]
-.pytest_cache/
-.uv-cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-.coverage.*
-htmlcov/
 
-# Build artifacts and OS files
-build/
-dist/
-*.egg-info/
+# macOS
 .DS_Store
-Thumbs.db
+**/.DS_Store
+
+!.env.example
