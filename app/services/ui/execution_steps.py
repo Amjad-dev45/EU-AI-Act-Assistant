@@ -3,6 +3,7 @@
 from html import escape
 
 from .json_view import json_content
+from .security_notice import security_event_description
 
 STEPS_CSS = """
 .es-pipeline { display: grid; gap: 5px; margin: 12px 0 0; min-width: 0; }
@@ -13,6 +14,7 @@ STEPS_CSS = """
 .es-rrf, .es-context { --tc-accent: #7c3aed; }
 .es-reranker { --tc-accent: #b45309; }
 .es-selected, .es-answer { --tc-accent: #047857; }
+.es-security { --tc-accent: #b91c1c; }
 .es-summary { display: flex; align-items: center; gap: 6px; padding: 7px 8px; cursor: pointer; list-style: none; background: color-mix(in srgb, var(--tc-accent) 5%, transparent); font-size: 11px; }
 .es-summary::-webkit-details-marker { display: none; }
 .es-summary:focus-visible { outline: 2px solid var(--tc-accent); outline-offset: -2px; }
@@ -33,11 +35,14 @@ STAGES = {
 }
 
 
-def format_execution_steps(data, call_number, *, arguments=None, cached=False):
+def format_execution_steps(data, call_number, *, arguments=None, cached=False, security_events=None):
     """Substep numbers belong to their tool call, not additional model turns."""
-    retrieval = data.get("retrieval", {}) if isinstance(data, dict) else {}
+    data = data if isinstance(data, dict) else {}
+    security_events = security_events or []
+    retrieval = data.get("retrieval", {})
     trace = retrieval.get("trace", {}) if isinstance(retrieval, dict) else {}
-    if not isinstance(trace, dict) or not trace:
+    trace = trace if isinstance(trace, dict) else {}
+    if not trace and not security_events:
         return ''
     steps = []
 
@@ -50,6 +55,11 @@ def format_execution_steps(data, call_number, *, arguments=None, cached=False):
                      '<span class="tc-arrow" aria-hidden="true"></span></summary><div class="es-body">'
                      '<p class="es-description">' + escape(description) + '</p>'
                      + json_content(payload) + '</div></details>')
+
+    def add_security(stages):
+        for event in security_events:
+            if event['stage'] in stages:
+                add('security', event['label'], security_event_description(event), event, 'Injection blocked')
 
     query = trace.get("query")
     if isinstance(query, str):
@@ -69,10 +79,12 @@ def format_execution_steps(data, call_number, *, arguments=None, cached=False):
         count = stage.get('count')
         badge = f'{count} result' + ('s' if count != 1 else '') if type(count) is int else ''
         add(name, label, description, stage, badge)
+    add_security({'retrieval_screening'})
     context = data.get("context", {})
     if isinstance(context, dict) and context.get("applied"):
         add('context', 'Expand section context', str(context.get('heading') or 'Added section passages.'),
             context, f'{context.get("chunk_count", 0)} passages')
+    add_security({'context_screening', 'generation_request', 'generation_screening'})
     answer = data.get("answer", {})
     if isinstance(answer, dict) and answer.get("status"):
         # Some answers copy verified source lists without a model call. Never
@@ -81,6 +93,7 @@ def format_execution_steps(data, call_number, *, arguments=None, cached=False):
         if answer.get('answer_mode'):
             description += ' Mode: ' + str(answer['answer_mode'])
         add('answer', 'RAG answer', description, answer, str(answer['status']))
+    add_security({'agent_evidence', 'unknown', 'unknown_request'})
     note = ('Cached call: these recorded substeps were reused, not executed again.' if cached
             else f'Inside tool call {call_number} · recorded substeps')
     return '<div class="es-pipeline"><p class="es-note">' + escape(note) + '</p>' + ''.join(steps) + '</div>'

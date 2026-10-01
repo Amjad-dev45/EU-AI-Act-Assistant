@@ -50,9 +50,28 @@ class InjectionTests(unittest.TestCase):
         result=answering.generate_answer('What does Article 4 say?',[bad],client=client)
         self.assertEqual(result['status'],'refused')
         self.assertEqual(result['refusal_reason'],'prompt_injection')
+        self.assertEqual(result['security']['blocked'][0]['stage'], 'generation_screening')
         client.chat.completions.create.assert_not_called()
         session=ToolSession('test',Mock(),'http://rag',100)
         with self.assertRaises(ValueError): session.add_evidence(bad)
+
+    def test_retrieval_and_expanded_context_detections_record_different_stages(self):
+        attack = {**HIT, 'text': injection_demo.TEXT, 'chunk_id': 'attack'}
+        safe = {**HIT, 'rerank_score': 5}
+        for stage, hits, context in (
+            ('retrieval_screening', [attack, safe], {'hits': [safe], 'applied': False, 'complete': None}),
+            ('context_screening', [safe], {'hits': [safe, attack], 'applied': True, 'complete': True}),
+        ):
+            with self.subTest(stage=stage), patch.object(answering, 'retrieve', return_value={'hits': hits}), \
+                    patch.object(answering, 'expand_context', return_value=context), \
+                    patch.object(answering, 'expand_article_context', return_value=None), \
+                    patch.object(answering, 'generate_answer', return_value={'status': 'refused'}) as generate:
+                result = answering.answer_question('Question', '/unused')
+            blocked = result['answer_context']['security']['blocked']
+            self.assertEqual(len(blocked), 1)
+            self.assertEqual(blocked[0]['stage'], stage)
+            self.assertEqual(blocked[0]['chunk_id'], 'attack')
+            self.assertNotIn(attack, generate.call_args.args[1])
 
     def test_test_flag_is_validated_and_off_unless_explicit(self):
         body={'request_id':'test','message':'Question'}

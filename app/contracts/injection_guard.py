@@ -12,6 +12,14 @@ COMPILED = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in PATT
 REFUSAL = "I can't follow requests to override the assistant's instructions or reveal private configuration. Please ask your corpus question directly."
 
 
+class SourceInjectionError(ValueError):
+    """Structured detection signal for tool traces and UI notifications."""
+
+    def __init__(self, message, *, blocked):
+        super().__init__(message)
+        self.blocked = blocked
+
+
 def normalize(value):
     return ''.join(c for c in unicodedata.normalize('NFKC', value) if unicodedata.category(c) != 'Cf')
 
@@ -28,12 +36,14 @@ def request_risks(value):
     return [name for name, pattern in COMPILED if pattern.match(value)]
 
 
-def screen_passages(hits):
+def screen_passages(hits, *, stage=None):
+    """Record where a check ran, separately from where retrieval found a hit."""
     allowed, blocked = [], []
     for hit in hits:
         reasons = source_risks(hit.get('text', ''))
         if reasons:
-            blocked.append({key: hit.get(key) for key in ('chunk_id', 'source', 'pages')} | {'reasons': reasons})
+            blocked.append({key: hit.get(key) for key in ('chunk_id', 'source', 'pages')}
+                           | {'reasons': reasons} | ({'stage': stage} if stage else {}))
         else:
             allowed.append(hit)
     return allowed, blocked

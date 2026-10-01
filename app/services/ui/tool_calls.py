@@ -5,6 +5,7 @@ import math
 from pathlib import Path
 from .json_view import JSON_CSS, json_content, json_view
 from .execution_steps import STEPS_CSS, format_execution_steps
+from .security_notice import tool_security_events
 
 TOOL_CSS = Path(__file__).with_name("tool_calls.css").read_text(encoding="utf-8") + JSON_CSS + STEPS_CSS
 # Fixed colors and icons identify tools; status is also written out in text.
@@ -12,6 +13,8 @@ TOOLS = {
     "search_corpus": ("search", "RAG search", '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>'),
     "calculator": ("calculator", "Calculator", '<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 11h2m4 0h2m-8 4h2m4 0h2m-8 3h2m4 0h2"/>'),
     "quote_exact": ("quote", "Exact quote", '<path d="M10 6H4v7h6V6Zm10 0h-6v7h6V6ZM10 13c0 4-2 5-4 6m14-6c0 4-2 5-4 6"/>'),
+    "lookup_definition": ("definition", "Definition lookup", '<path d="M3 4h7l2 2 2-2h7v15h-7l-2 2-2-2H3V4Zm9 2v15"/>'),
+    "get_application_dates": ("dates", "Application dates", '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 2v6m10-6v6M3 11h18m-13 4h3m3 0h3"/>'),
 }
 
 
@@ -70,7 +73,9 @@ def _result(output):
         return '<p class="tc-answer tc-number">' + _text(output["result"]) + '</p>'
     grounded = output.get("grounded_answer", {})
     answer = grounded.get("answer") if isinstance(grounded, dict) else None
-    answer = answer or output.get("quote")
+    answer = answer or output.get("quote") or output.get("definition") or output.get('message')
+    if not answer and output.get('rules'):
+        answer = '\n\n'.join(row['text'] for row in output['rules'])
     content = '<p class="tc-answer">' + _text(answer) + '</p>' if answer else ''
     evidence = output.get("evidence", output.get("hits", []))
     if isinstance(evidence, list) and evidence:
@@ -95,7 +100,7 @@ def format_tool_calls(trace):
         name = str(entry.get("name", entry.get("tool", "tool")))
         color, label, icon = TOOLS.get(name, ("other", name, '<path d="m8 5-6 7 6 7m8-14 6 7-6 7"/>'))
         args = _arguments(entry.get("arguments", {}))
-        preview = (args.get("query") or args.get("expression") or args.get("phrase") or args.get("document_id")
+        preview = (args.get("query") or args.get("expression") or args.get("phrase") or args.get("term") or args.get("topic") or args.get("document_id")
                    or "View inputs and results") if isinstance(args, dict) else args
         output = entry.get("output")
         # Duplicate calls retain the original result without claiming another execution.
@@ -104,8 +109,12 @@ def format_tool_calls(trace):
             output, cached = output["result"], True
         failed = isinstance(output, dict) and bool(output.get("error"))
         refused = isinstance(output, dict) and isinstance(output.get("grounded_answer"), dict) and output["grounded_answer"].get("status") == "refused"
-        status = "Failed" if failed else "No answer" if refused else "Complete" if output is not None else "No result"
+        no_match = isinstance(output, dict) and output.get('found') is False
+        status = "Failed" if failed else "No match" if no_match else "No answer" if refused else "Complete" if output is not None else "No result"
         badges = '<span class="tc-status' + (' tc-failed' if failed else '') + '">' + status + '</span>'
+        security_events = tool_security_events(entry)
+        if security_events:
+            badges += '<span class="tc-status tc-failed">Injection blocked</span>'
         if cached:
             badges += '<span class="tc-status">Cached</span>'
         duration = entry.get("duration_ms")
@@ -123,14 +132,15 @@ def format_tool_calls(trace):
         call_number = len(cards) + 1
         # Keep every substep inside its parent disclosure so collapsed calls
         # occupy only one card, even when a turn runs several searches.
-        if name == 'search_corpus':
-            body = format_execution_steps(data, call_number, arguments=args, cached=cached) + body
+        if name in {'search_corpus', 'lookup_definition'} or security_events:
+            body = format_execution_steps(data, call_number, arguments=args, cached=cached,
+                                          security_events=security_events) + body
         card = trace_card(f'{call_number}. {label}', preview, body, color=color, badges=badges, icon=icon,
                           meta='Tool call' + (f' · {timing}' if timing else ''))
         cards.append(card)
     security = [e for e in trace if isinstance(e, dict) and e.get("type") == "security"] if isinstance(trace, list) else []
     if security and not cards:
-        return '<p class="tc-empty"><strong>Request blocked before tools ran.</strong><br>An explicit instruction override was detected. No model or tool call was made.</p>'
+        return '<p class="tc-empty"><strong>Request blocked before tools ran.</strong><br>Step: input check. An explicit instruction override was detected. No model or tool call was made.</p>'
     scope = any(isinstance(e, dict) and e.get('type') == 'scope'
                 and e.get('action') == 'no_supported_evidence' for e in trace) if isinstance(trace, list) else False
     if scope and not cards:

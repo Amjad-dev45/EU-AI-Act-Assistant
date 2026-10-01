@@ -9,6 +9,8 @@ from .errors import ApiError, INVALID_REQUEST
 
 DEMO_TOOLS = ("rag", "calculator", "internet", "quote_exact")
 MAX_MESSAGE_CHARS = 2000
+MAX_HISTORY_MESSAGES = 5
+MAX_HISTORY_CHARS = 24000
 MAX_K = 10
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
@@ -57,16 +59,16 @@ def validate_chat(body) -> dict:
     validate_request_id(body)
     _text(body, "message")
     history = body.get("history", [])
-    if not isinstance(history, list) or len(history) > 6:
-        raise _bad("`history` must contain at most 6 messages.")
+    if not isinstance(history, list) or len(history) > MAX_HISTORY_MESSAGES:
+        raise _bad(f"`history` must contain at most {MAX_HISTORY_MESSAGES} messages.")
     clean = []
     for message in history:
         if not isinstance(message, dict) or message.get("role") not in ("user", "assistant"):
             raise _bad("History roles must be user or assistant.")
         content = _text(message, "content", max_chars=12000)
         clean.append({"role": message["role"], "content": content})
-    if sum(len(message["content"]) for message in clean) > 24000:
-        raise _bad("History is longer than 24000 characters; start a new chat.")
+    if sum(len(message["content"]) for message in clean) > MAX_HISTORY_CHARS:
+        raise _bad(f"History is longer than {MAX_HISTORY_CHARS} characters; start a new chat.")
     return {"request_id": body["request_id"], "message": body["message"], "history": clean, "injection_test": injection_test_flag(body)}
 
 
@@ -90,6 +92,32 @@ def validate_quote(body) -> dict:
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
         raise _bad("`page` must be an integer >= 1.")
     _text(body, "phrase", required=False)  # optional exact phrase
+    return body
+
+
+def validate_lookup(body, field) -> dict:
+    """The two corpus lookups each accept a single bounded text selector."""
+    body = _require_object(body)
+    validate_request_id(body)
+    _text(body, field, max_chars=200)
+    if set(body) - {'request_id', field}:
+        raise _bad('Unexpected lookup fields.')
+    return body
+
+
+def validate_source_preview(body) -> dict:
+    body = _require_object(body)
+    validate_request_id(body)
+    _text(body, 'document_id', max_chars=128)
+    page = body.get('page')
+    if type(page) is not int or page < 1:
+        raise _bad('`page` must be a positive integer.')
+    excerpt = body.get('excerpt', '')
+    if not isinstance(excerpt, str) or len(excerpt) > 12000:
+        raise _bad('Source excerpt must be text of at most 12000 characters.')
+    if set(body) - {'request_id', 'document_id', 'page', 'excerpt'}:
+        raise _bad('Unexpected source preview fields.')
+    body['excerpt'] = excerpt
     return body
 
 

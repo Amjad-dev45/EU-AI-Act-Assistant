@@ -5,7 +5,7 @@ The current implementation extracts PDF text, chunks it, and supports saved FAIS
 retrieval with BM25 keyword search, rank fusion, and cross-encoder reranking from
 the command line, plus grounded answer generation with source citations.
 The web UI talks to a bounded AI agent, which decides when to use the RAG
-service, a calculator, or exact source quotes. Each service has its own Docker
+service, a calculator, exact source quotes, corpus definitions, or application-date clauses. Each service has its own Docker
 container; the browser communicates only with the UI.
 
 ## Setup
@@ -468,8 +468,44 @@ and blocks repeated identical tool executions. The agent can answer greetings
 without a tool and rephrase unsuccessful searches within its remaining budget.
 Only citations found in the current tool results are accepted. This checks
 citation membership, not the factual correctness of every generated sentence.
-History is limited to six messages and 24,000 characters and is not treated as
+History is limited to the last five individual user/assistant messages before the
+current question, within 24,000 characters, and is not treated as
 source evidence. Refreshing the browser starts a new session.
+
+Use the pencil beside a user message to edit it. Saving the edit removes its old
+answer and all later messages, then generates a replacement answer using only
+the preceding context (still at most five messages). Sources, tool traces, PDF
+preview and the previous Teams sharing state are cleared while it regenerates.
+If generation fails, the later messages stay removed and the edited question
+remains in the input for retry. Cancelling an edit leaves the chat unchanged.
+The UI keeps raw text for the 40 visible messages so older visible turns can be
+edited; that archive is not sent as model history. Existing diagnostic files and
+messages already sent to Teams are not deleted by editing the conversation.
+
+When a guard records a prompt-injection detection, the UI shows a warning popup
+and a notice in the status line. It distinguishes a message blocked before model
+execution from suspicious retrieved material excluded from evidence. The demo
+checkbox or an ordinary question about injection does not itself trigger a
+warning. This displays the existing guard decisions; it does not add a detector.
+Warnings name the origin: your message, or the recorded source filename and
+page(s). Repeated source locations are combined; missing locations are labelled
+unavailable. Source names are displayed as text, and rejected instructions are
+not copied into the warning.
+Each warning identifies its tool-call number and the guard that detected it
+(input check, post-retrieval screening, answer-context screening, final generation
+check, or agent evidence validation). Expand the marked tool card to inspect its
+numbered security substep and JSON. FAISS/BM25/RRF/reranker snapshots show where a
+flagged chunk appeared; those retrieval algorithms are not injection detectors.
+Older traces without stage metadata are labelled “stage not recorded”.
+
+Contextual follow-ups (examples, comparisons, summaries) resolve their subjects
+from that history and obtain supporting evidence again. If the model skips tools
+and attempts an unsupported answer, a contextual request gets one recovery turn
+within the existing six-step cap; repeated skipped retrieval or failed retrieval
+still produces a refusal. Examples may be clearly labelled hypothetical
+illustrations of retrieved rules, using generic actors rather than unsupported
+claims about real companies. A summary follows the requested length and cites
+the newly retrieved evidence.
 
 Only port 7860 is published, on localhost. The API key is forwarded to Agent and
 RAG, never to UI; the RAG data mount also holds new query embedding cache files.
@@ -508,7 +544,7 @@ scorecard in `data/eval_results.json`. The agent's extra model requests and late
 must be measured separately from the earlier plain-RAG results.
 
 Remaining course work includes the student-authored agent scenario questions,
-agent-vs-RAG comparison, the other two corpus tools, approved messaging, injection
+agent-vs-RAG comparison, agent-proposed approved messaging, action-injection
 checks, and full agent evaluation. Do not interpret this integration as completion
 of all Agent day 2 requirements. Existing answer-quality backlog remains in
 `scripts/FAILURE_LOG.md`.
@@ -586,7 +622,7 @@ The bar below the conversation shows input + output tokens for the **latest agen
 model request**, against GPT-4o mini's [128,000-token context window](https://developers.openai.com/api/docs/models/gpt-4o-mini).
 RAG answer generation has a separate context bar when usage is available. These
 are per-request measurements from API usage, not cumulative billing or a live
-estimate while typing. Unknown counts stay unavailable. The last three exchanges
+estimate while typing. Unknown counts stay unavailable. The last five messages
 are still the history limit; the context bar does not expand this cap.
 
 Use **RAG walkthrough** to show FAISS and BM25 candidates, RRF fusion, cross-encoder
@@ -696,6 +732,15 @@ count. Successful quote text is appended by the application without paraphrasing
 with the exact source/page returned by the tool. The explanation remains separate.
 A saved RAG answer cannot silently discard the requested quotation.
 
+For explanation-plus-quotation requests, a trailing presentation clause such as
+“and include a verified exact quotation” is removed only from the retrieval
+query. The original user request still requires `quote_exact`; its article,
+topic, and legal qualifications remain in the search. The trace records both
+model-proposed and effective tool arguments. This avoids ranking passages against
+words about answer formatting. If retrieval supplies no evidence or a quote's
+location is unknown, recovery guidance asks for a content search instead of
+guessing filenames and walking through arbitrary page numbers.
+
 A retrieved chunk can span several source pages. If a phrase is absent on the
 requested page, the error names other pages covered by that same retrieved chunk
 so the agent can retry. The quote endpoint still performs a strict literal match
@@ -729,6 +774,12 @@ approve a send through a prompt. This is manual answer sharing, not the full
 assignment's model-proposed messaging workflow or action-injection evaluation.
 
 Messages use Microsoft's [Adaptive Card webhook format](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook).
+Simple HTML tables in answers are converted into native card columns, with bold
+header cells and wrapped text. Surrounding text and citation markers are retained;
+ordinary text/Markdown answers are unchanged. CSS, scripts and full webpage
+layouts are not reproduced. Nested tables and merged cells are rejected instead
+of being rearranged silently. Generate a new answer after updating the sender:
+previously prepared share drafts keep their original payload.
 Oversized cards are rejected without truncating quotations. A durable claim
 prevents double clicks or restarts from submitting the same draft twice. There
 are no automatic retries: timeouts can happen after Teams accepted a message.
@@ -736,3 +787,68 @@ The UI distinguishes rejection and uncertain delivery from webhook acceptance;
 **Submitted to Teams** means the webhook accepted it, so check the channel for
 actual delivery. Custom Power Automate flows must accept the Adaptive Card
 `type: message` / `attachments` envelope and post it to the channel.
+
+
+## Definition and application-date tools
+
+The agent now has five read-only tools: `search_corpus`, `calculator`, `quote_exact`,
+`lookup_definition`, and `get_application_dates`. Its six-step cap still applies.
+Exact structured definitions and application-date clauses come from `corpus.json`
+without embeddings or an extra generation call. Other definition requests use the
+full RAG pipeline; their embedding/chat usage and retrieval stages appear in the trace.
+
+- `lookup_definition(term)` finds definitions anywhere in the indexed corpus,
+  including articles, recitals, annexes, and other documents. Structured numbered
+  definitions use an exact fast path with complete wording and actual pages.
+  Other formats use FAISS + BM25, reranking, and grounded generation, explicitly
+  requiring a definition or explanation of meaning rather than a mere mention.
+  Unsupported requests return `found=false`; conflicting exact definitions require
+  clarification. It distinguishes terms such as provider and deployer. Existing
+  Q11 demonstrates a structured definition; “What does machine learning mean in
+  the corpus?” exercises a definition outside Article 3. Retrieval can miss evidence;
+  a refusal means no supported definition was found, not proof that none exists.
+- `get_application_dates(topic)` returns the relevant clauses from Articles 113
+  and 111, including exceptions and transition conditions. Existing Q13 is a
+  basic demonstration; Q16, Q19, Q27 and Q30 exercise the exceptions. Dates are
+  extracted from the uploaded document, not hard-coded calendar answers or live
+  legal updates. `dates_in_clause` can include both a cutoff and a compliance
+  deadline; interpret them using the accompanying exact clause.
+
+Supported topics: `general`, `ai_literacy`, `prohibited_practices`, `gpai`,
+`governance`, `penalties`, `gpai_fines`, `conformity_bodies`, `confidentiality`,
+`high_risk_products`, `high_risk`, `transparency`, `legacy_gpai`,
+`legacy_high_risk`, `large_scale_it`. Unknown topics return this list and suggest
+`search_corpus`; missing or ambiguous Articles return no evidence. The named-topic
+lookup keeps Article 101's exception and Article 111's transition conditions with
+their dates, instead of relying on isolated semantically similar date passages.
+
+Internal RAG routes: `POST /v1/definition` (`term`) and
+`POST /v1/application-dates` (`topic`), each with `request_id`.
+The cards show Definition lookup in teal and Application dates in orange.
+Students still need to author the required own-tool agent evaluation scenarios
+and expected tools, and measure tool choice with the updated five-tool set.
+
+## Clickable PDF sources
+
+Click a cited page in the top-right Sources panel to view its original PDF excerpt.
+Matched passage text is highlighted in yellow; click the image to enlarge it.
+Each page of a multi-page citation is selectable. Starting a new conversation or
+receiving a new answer clears the previous preview. The full extracted passage
+is also expandable below the image.
+
+The preview follows UI → Agent → RAG (`POST /v1/source-preview`). Only RAG reads
+`data/sources/`; the UI receives a PNG, and no preview image goes into the model
+context. PyMuPDF renders in memory and never saves annotations to the PDF. Source
+IDs and pages must be present in `corpus.json`, and paths must remain under
+`data/sources/`. Missing PDFs show an explicit unavailable message. If text cannot
+be located reliably, the original page appears without highlights; partial matches
+are labelled. Scanned PDFs without selectable text have this same fallback.
+
+Rebuild the services after pulling these changes:
+
+```bash
+uv run scripts/run_app.py up -d --build ui agent rag
+```
+
+Implementation references: [PyMuPDF Page API](https://pymupdf.readthedocs.io/en/latest/page.html),
+[Gradio Radio](https://www.gradio.app/docs/gradio/radio).

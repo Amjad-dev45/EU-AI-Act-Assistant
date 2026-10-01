@@ -1,6 +1,7 @@
 """Accessible bars for actual token usage in the latest model requests."""
 from html import escape
 from contracts.model_usage import context_snapshot
+from contracts.schemas import MAX_HISTORY_MESSAGES
 
 # These target Gradio's outer wrappers, beyond the scoped HTML template.
 CONTEXT_LAYOUT_CSS = """
@@ -64,7 +65,7 @@ def format_context(body=None):
         rag_meter, rag_note = _meter(rag, "RAG answer", "cu-rag")
         notes.append(rag_note)
     history = context.get("history_messages_sent")
-    note = "Latest request per model, not cumulative tokens. Agent and RAG use separate contexts. History is capped at 3 recent exchanges."
+    note = f"Latest request per model, not cumulative tokens. Agent and RAG use separate contexts. History is capped at {MAX_HISTORY_MESSAGES} previous user/assistant messages."
     if type(history) is int:
         note += f" Sent {history} previous messages on this turn."
     notes.append(note)

@@ -4,6 +4,8 @@
 .tc-search { --tc-accent: #2563eb; }
 .tc-calculator { --tc-accent: #047857; }
 .tc-quote { --tc-accent: #7c3aed; }
+.tc-definition { --tc-accent: #0f766e; }
+.tc-dates { --tc-accent: #c2410c; }
 .tc-keyword { --tc-accent: #0891b2; }
 .tc-reranker { --tc-accent: #b45309; }
 .tc-summary { display: flex; align-items: center; gap: 10px; padding: 14px 12px; cursor: pointer; list-style: none; background: color-mix(in srgb, var(--tc-accent) 6%, transparent); }

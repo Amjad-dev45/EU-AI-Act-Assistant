@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from services.agent.loop import run_agent, MAX_STEPS
-from services.agent.quotations import finish_quotations, QUOTE_REFUSAL
+from services.agent.quotations import finish_quotations, quotation_search_query, QUOTE_REFUSAL
 from services.agent.tools.runtime import ToolSession
 from test_agent_loop import client_for, response, final, rag_response
 
@@ -28,6 +28,44 @@ def quote_result(text=PHRASE):
 
 
 class QuotationTests(unittest.TestCase):
+    def test_quote_formatting_is_separated_without_dropping_content_qualifications(self):
+        for question, expected in [
+            ('Explain Article 4 and include a verified exact quotation.', 'Explain Article 4'),
+            ('Explain the exception for SMEs in Article 99; provide one exact quote.',
+             'Explain the exception for SMEs in Article 99'),
+            ('Compare providers and deployers, then include a quotation from the corpus.',
+             'Compare providers and deployers'),
+        ]:
+            with self.subTest(question=question):
+                self.assertEqual(quotation_search_query(question), expected)
+        for question in ('Quote Article 4.', 'Explain Article 4 and Article 5.',
+                         'Explain Article 4 and include a quotation about provider obligations.',
+                         'What does the term quotation mean?'):
+            self.assertEqual(quotation_search_query(question), question)
+
+    def test_first_search_uses_content_query_but_final_answer_still_requires_exact_quote(self):
+        http = Mock(side_effect=[(200, source_result()), (200, quote_result())])
+        result, _ = self.run_case([
+            response(name='search_corpus', arguments={'query': 'Article 4'}),
+            response(final(grounded='rag-1')),
+            response(name='quote_exact', arguments=ARGS),
+            response(final('Explanation.', [1]))], http,
+            question='Explain Article 4 and include a verified exact quotation.')
+        self.assertEqual(http.call_args_list[0].args[2]['query'], 'Explain Article 4')
+        self.assertEqual(result['status'], 'answered')
+        self.assertIn('**Verified quotation**', result['answer'])
+
+    def test_unknown_quote_location_requires_search_instead_of_random_pages(self):
+        import time
+        http = Mock(return_value=(404, {}))
+        session = ToolSession('test', http, 'http://rag', time.monotonic()+10)
+        with self.assertRaisesRegex(ValueError, 'Call search_corpus'):
+            session.execute('quote_exact', {**ARGS, 'document_id': 'ai_act'})
+        session.add_evidence(source_result()['hits'][0])
+        with self.assertRaisesRegex(ValueError, 'exact filename'):
+            session.execute('quote_exact', {**ARGS, 'document_id': 'AI_Act'})
+        self.assertEqual(http.call_count, 2)
+
     def run_case(self, replies, transport, question=QUESTION):
         client, create = client_for(*replies)
         with TemporaryDirectory() as directory:

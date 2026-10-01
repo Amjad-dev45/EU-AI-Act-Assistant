@@ -10,6 +10,9 @@ ROUTES = {
     ("POST", "/v1/search"): handlers.search,
     ("POST", "/v1/answer"): handlers.answer,
     ("POST", "/v1/quote"): handlers.quote,
+    ("POST", "/v1/definition"): handlers.definition,
+    ("POST", "/v1/application-dates"): handlers.application_dates,
+    ("POST", "/v1/source-preview"): handlers.source_preview,
     ("POST", "/v1/ping"): handlers.ping,  # connectivity test
 }
 

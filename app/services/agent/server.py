@@ -4,7 +4,7 @@ import time
 
 from contracts.errors import ApiError, BAD_GATEWAY
 from contracts.httpkit import call_json, serve_forever
-from contracts.schemas import validate_ping
+from contracts.schemas import validate_ping, validate_source_preview
 from .loop import run_agent
 from .teams import prepare_share, send_share
 
@@ -43,11 +43,18 @@ def chat(body):
     return 200, result
 
 
+def source_preview(body):
+    """UI-only source inspection: no model call and no image in chat history."""
+    req = validate_source_preview(body)
+    return call_json('POST', f'{RAG_URL}/v1/source-preview', req, 20, 'rag')
+
+
 ROUTES = {
     ("GET", "/health"): health,
     ("POST", "/v1/ping"): ping,  # connectivity test
     ("POST", "/v1/chat"): chat,
     ("POST", "/v1/share/teams"): send_share,  # UI approval only; not an LLM tool
+    ("POST", "/v1/source-preview"): source_preview,
 }
 
 

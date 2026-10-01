@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 
 from contracts.errors import ApiError
+from .teams_format import answer_blocks
 
 MAX_CARD_BYTES = 28_000
 TIMEOUT_S = 15
@@ -40,13 +41,13 @@ def _webhook():
 
 
 def _card(question, answer, citations):
-    """Keep the displayed answer verbatim; share source labels, never traces."""
+    """Preserve answer content; render HTML tables with native card columns."""
     body = [
         {"type": "TextBlock", "text": "Challenge Week · EU AI Act", "weight": "Bolder", "size": "Large", "wrap": True},
         {"type": "TextBlock", "text": "Question", "weight": "Bolder", "separator": True},
         {"type": "TextBlock", "text": question, "wrap": True},
         {"type": "TextBlock", "text": "Answer", "weight": "Bolder", "separator": True},
-        {"type": "TextBlock", "text": answer, "wrap": True},
+        *answer_blocks(answer),
     ]
     sources = []
     for item in citations:

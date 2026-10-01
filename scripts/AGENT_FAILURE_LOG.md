@@ -118,3 +118,68 @@ The replays took 6, 5, 4, and 2 model steps respectively. Reports are
 `logs/agent_quote_priority.json` and `logs/agent_quote_regression.json`.
 These are targeted integration checks, not measured overall accuracy. Retrieval,
 RAG generation prompts, source data, and student questions were not changed.
+
+
+## Quotation formatting polluted retrieval (2026-10-01)
+
+The prompt “Explain Article 4 and include a verified exact quotation.” failed in
+`1790869847180471711-687a5c08.json` (fresh) and
+`1790869814039172234-7f5cb07a.json` (with history). The full formatting request
+received a top reranker score of -6.759, below the unchanged -5 relevance gate.
+The agent then guessed AI_Act/ai_act filenames and arbitrary pages.
+
+Fix: remove only a trailing quote-presentation clause from the effective search
+query, retaining the substantive question and requiring quote_exact for the
+original request. Empty retrieval and unknown quote locations now give explicit
+content-search recovery guidance. Actual source filenames and page metadata must
+be obtained from evidence or explicitly supplied by the user; the strict quote
+endpoint, relevance threshold and six-step cap are unchanged.
+
+Validation: 254 offline tests pass. Both original requests replay successfully in
+five model steps, including the original four-message history. Each run recovered
+from page 50 to page 51 using the retrieved cross-page evidence; its quotation was
+checked as an exact substring of corpus page 51 and appears in the final answer.
+Saved traces: `logs/agent_runs/1790870176216638907-c1b3c8a4.json` and
+`logs/agent_runs/1790870188616023942-95e200c1.json`. The separate content-query probe
+returned Article 4 first with score 1.040. These are focused regression checks,
+not an overall accuracy claim; model-dependent recovery can still use extra steps.
+
+
+## Contextual examples and summaries rejected (2026-10-01)
+
+The memory demo's “Give me an example of each.” and “Summarize that difference
+in one sentence.” were refused despite the provider/deployer conversation being
+present in the five-message history. Original traces:
+`1790873115282078707-69221912.json` and
+`1790873123103066572-b32182db.json`. The model attempted an answer from history
+without new evidence, so the scope guard correctly blocked it. Live regression
+checks also exposed stale history citation IDs and a search for examples in the
+source, instead of the underlying definitions needed to illustrate the concepts.
+
+Fix: contextual follow-ups receive explicit guidance to resolve their subjects
+and retrieve fresh evidence for every compared term. Illustrative examples use
+generic actors and an explicit hypothetical label; requests for documented or
+real-world examples still require evidence of those examples. Summaries retain
+the requested length. A skipped retrieval or stale citation gets one bounded
+evidence-recovery attempt within the existing six-step budget. Failed retrieval
+or repeated unsupported answers still lead to refusal; citation membership and
+scope checks remain active. No extra classifier call or history expansion.
+
+Validation: 257 offline tests pass, including skipped-tool recovery, stale citation
+recovery, refusal when tools are still skipped, and failed-retrieval refusal. Both
+original requests replay successfully with their five-message history. The full
+four-prompt memory sequence also passes: provider definition, comparison, labelled
+hypothetical examples, then a one-sentence summary. Every contextual response
+retrieves both definitions and returns current citations in three model steps;
+the initial provider question takes two. The final request sends five preceding
+individual messages. Traces under `logs/agent_runs/`:
+
+- Original examples replay: `1790873625590621097-1e7a544c.json`
+- Original summary replay: `1790873628156608992-00a2fcb5.json`
+- Full sequence: `1790873630447691921-1b088d90.json`,
+  `1790873633363936771-166f8450.json`,
+  `1790873636808553804-1cc654ab.json`,
+  `1790873642077354383-4d423721.json`
+
+These are targeted regression checks. Citation membership does not prove every
+generated statement is factually complete; overall answer accuracy is separate.

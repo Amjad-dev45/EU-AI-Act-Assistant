@@ -1,5 +1,6 @@
 """A plausible unsupported model reply must never reach the conversation."""
 from pathlib import Path
+from itertools import product
 import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -40,6 +41,43 @@ class ScopeTests(unittest.TestCase):
     def test_corpus_facts_also_need_current_evidence(self):
         result, _ = self.run_case([response(final('Article 4 is about AI literacy.'))], 'What does Article 4 say?')
         self.assertEqual(result['status'], 'refused')
+
+    def test_contextual_followups_recover_skipped_retrieval_instead_of_losing_history(self):
+        questions = ('Give me an example of each.', 'Summarize that difference in one sentence.')
+        for question, old_citations in product(questions, ([], [1])):
+            with self.subTest(question=question, old_citations=old_citations):
+                history = [{'role': 'user', 'content': 'Compare providers and deployers.'},
+                           {'role': 'assistant', 'content': 'They have different roles. [1]'}]
+                http = Mock(return_value=(200, rag_response()))
+                result, calls = self.run_case([
+                    response(final('An unchecked history-only answer.', old_citations)),
+                    response(name='search_corpus', arguments={'query': 'Provider and deployer definitions'}),
+                    response(final('A supported follow-up.', [1]))], question, history=history, transport=http)
+                self.assertEqual(result['status'], 'answered')
+                self.assertEqual(result['answer'], 'A supported follow-up. [1]')
+                self.assertNotIn('unchecked', result['answer'])
+                self.assertEqual(calls.call_count, 3)
+                self.assertEqual(http.call_args.args[2]['query'], 'Provider and deployer definitions')
+                self.assertTrue(any(t.get('action') == 'retrieve_followup_evidence' for t in result['trace']))
+
+    def test_followup_recovery_does_not_bypass_scope_if_model_still_skips_tools(self):
+        result, calls = self.run_case([
+            response(final('An unsupported example.')),
+            response(final('Still unsupported.'))], 'Give me an example of each.',
+            history=[{'role': 'assistant', 'content': 'Unverified claims in history.'}])
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['answer'], REFUSAL)
+        self.assertEqual(calls.call_count, 2)
+
+    def test_failed_followup_retrieval_remains_a_refusal(self):
+        result, calls = self.run_case([
+            response(name='search_corpus', arguments={'query': 'Unknown subjects'}),
+            response(final('An unsupported summary.'))], 'Summarize that difference.',
+            history=[{'role': 'assistant', 'content': 'Earlier unsupported answer.'}],
+            transport=Mock(return_value=(503, {})))
+        self.assertEqual(result['status'], 'refused')
+        self.assertEqual(result['answer'], REFUSAL)
+        self.assertEqual(calls.call_count, 2)
 
     def test_greetings_thanks_and_capabilities_still_need_no_tools(self):
         for question in ('Hello!', 'Thanks!', 'What can you do?', 'Bonjour!'):

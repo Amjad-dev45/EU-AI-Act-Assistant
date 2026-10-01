@@ -184,11 +184,12 @@ def generate_answer(question, hits, client=None, *, expanded=False, article_cont
         "context_mode": "article" if article_context else "list" if expanded else "passages",
         "answer_mode": "generated",
     }
-    _, blocked = screen_passages(hits)
+    _, blocked = screen_passages(hits, stage="generation_screening")
     risk = request_risks(question)
     if risk or blocked:
         result.update(answer=INJECTION_REFUSAL if risk else "The available source contains instructions aimed at the assistant. I can't use it as evidence.",
-                      refusal_reason="prompt_injection", security={"request_risks": risk, "blocked": blocked})
+                      refusal_reason="prompt_injection", security={"request_risks": risk,
+                          "request_stage": "generation_request", "blocked": blocked})
         return {**result, "generation_seconds": time.perf_counter() - started}
     if not evidence:
         return {**result, "generation_seconds": time.perf_counter() - started}
@@ -260,7 +261,7 @@ def answer_question(question, data_dir, client=None, *, use_expansion=True,
     started = time.perf_counter()
     options = {"injection_test": True} if injection_test else {}
     retrieval = retrieve(question, data_dir, k=MAX_CONTEXT_CHUNKS, **options)
-    safe_hits, blocked = screen_passages(retrieval["hits"])
+    safe_hits, blocked = screen_passages(retrieval["hits"], stage="retrieval_screening")
     top_score = safe_hits[0].get("rerank_score") if safe_hits else None
     if min_rerank_score is not None and top_score is not None and top_score < min_rerank_score:
         context = expand_context(question, [], data_dir, enabled=False)
@@ -276,7 +277,7 @@ def answer_question(question, data_dir, client=None, *, use_expansion=True,
     # an exception in a later paragraph of the article containing the top match.
     if use_expansion and context["complete"] is None:
         context = expand_article_context(safe_hits, data_dir) or context
-    screened, extra_blocked = screen_passages(context["hits"])
+    screened, extra_blocked = screen_passages(context["hits"], stage="context_screening")
     blocked += extra_blocked
     # Do not silently turn a complete legal section into a partial answer.
     if extra_blocked and context.get("applied"):

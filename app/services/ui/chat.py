@@ -8,44 +8,44 @@ from .retrieval_trace import format_retrieval
 from .tool_calls import format_tool_calls
 from .context_usage import format_context
 from .rag_demo import format_rag_demo
+from .security_notice import injection_notice
 from contracts.errors import ApiError
 from contracts.httpkit import call_json
-from contracts.schemas import new_request_id
+from contracts.schemas import new_request_id, MAX_HISTORY_MESSAGES, MAX_HISTORY_CHARS
 
 AGENT_URL = os.environ.get("AGENT_URL", "http://agent:8001").rstrip("/")
 TIMEOUT_S = float(os.environ.get("UI_TIMEOUT_S", "300"))
 MAX_MESSAGE_CHARS = 2000
-MAX_HISTORY_MESSAGES = 6
-MAX_HISTORY_CHARS = 24000
 MAX_DISPLAY_MESSAGES = 40
 MAX_REQUEST_BYTES = 128 * 1024
 
 
 def bounded_history(messages):
-    """Keep recent complete exchanges within the Agent's count/text limits."""
-    pairs = []
-    for index in range(0, len(messages) - 1, 2):
-        pair = messages[index:index + 2]
-        if (all(isinstance(item, dict) and isinstance(item.get("content"), str) for item in pair)
-                and pair[0].get("role") == "user" and pair[1].get("role") == "assistant"):
-            pairs.append([{"role": item["role"], "content": item["content"][:12000]}
-                          for item in pair])
+    """Keep the latest individual messages; an odd limit may start with an answer."""
     selected, characters = [], 0
-    for pair in reversed(pairs):
-        size = sum(len(item["content"]) for item in pair)
-        if len(selected) + 2 > MAX_HISTORY_MESSAGES or characters + size > MAX_HISTORY_CHARS:
+    for item in reversed(messages):
+        if (not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
+                or not isinstance(item.get("content"), str) or not item["content"].strip()):
+            continue
+        content = item["content"][:12000]
+        if len(selected) >= MAX_HISTORY_MESSAGES or characters + len(content) > MAX_HISTORY_CHARS:
             break
-        selected = pair + selected
-        characters += size
-    return selected
+        selected.append({"role": item["role"], "content": content})
+        characters += len(content)
+    return list(reversed(selected))
 
 
 def _state(value):
     value = value if isinstance(value, dict) else {}
     history = value.get("history", [])
     display = value.get("display", [])
-    return {"history": bounded_history(history if isinstance(history, list) else []),
-            "display": list(display[-MAX_DISPLAY_MESSAGES:]) if isinstance(display, list) else []}
+    state = {"history": bounded_history(history if isinstance(history, list) else []),
+             "display": list(display[-MAX_DISPLAY_MESSAGES:]) if isinstance(display, list) else []}
+    # Keep raw text for the visible conversation so older turns can be edited.
+    # Only bounded_history, never this archive, is sent to the Agent.
+    if isinstance(value.get("messages"), list):
+        state["messages"] = list(value["messages"][-MAX_DISPLAY_MESSAGES:])
+    return state
 
 
 def _failure(message, state, feedback):
@@ -72,6 +72,12 @@ def _public_details(body):
                                       "usage", "steps", "mock", "context_window", "sharing") if key in body}
 
 
+def _security_feedback(feedback, response):
+    notice = injection_notice(response)
+    # A raw HTML paragraph prevents Markdown/autolinks from interpreting filenames.
+    return f"<p>⚠️ <strong>Prompt injection detected.</strong> {escape(notice)}</p>\n\n{feedback}" if notice else feedback
+
+
 def submit_chat(message, session, injection_test=False):
     """Send bounded conversation to the Agent and return all ten UI outputs."""
     state = _state(session)
@@ -87,7 +93,7 @@ def submit_chat(message, session, injection_test=False):
     # The transport escapes Unicode when serializing JSON. Long non-ASCII
     # histories can hit its byte limit before reaching the character limit.
     while payload["history"] and len(json.dumps(payload).encode("utf-8")) > MAX_REQUEST_BYTES:
-        payload["history"] = payload["history"][2:]
+        payload["history"] = payload["history"][1:]
     try:
         status, body = call_json("POST", f"{AGENT_URL}/v1/chat", payload, TIMEOUT_S, "agent")
     except ApiError as error:
@@ -99,6 +105,7 @@ def submit_chat(message, session, injection_test=False):
         return _failure(message, state, "Could not complete the request. Your question is still here; try again.")
     if isinstance(body, dict) and body.get("status") == "error" and body.get("mock") is False:
         failed = _failure(message, state, "The assistant could not finish this request. Your question is still here; try again.")
+        failed = (*failed[:3], _security_feedback(failed[3], body), *failed[4:])
         trace = body.get("trace", [])
         summary = format_tool_calls(trace)
         return *failed[:5], summary, _public_details(body), format_retrieval(trace), format_context(body), format_rag_demo(trace)
@@ -115,12 +122,15 @@ def submit_chat(message, session, injection_test=False):
                                                    {"role": "assistant", "content": answer}])
     display = (state["display"] + [{"role": "user", "content": question},
                                    {"role": "assistant", "content": display_answer}])[-MAX_DISPLAY_MESSAGES:]
+    messages = (state.get("messages", []) + [{"role": "user", "content": question},
+                                             {"role": "assistant", "content": answer}])[-MAX_DISPLAY_MESSAGES:]
     details = _public_details(body)
     feedback = "Answer ready."
     tokens = body["usage"].get("total_tokens")
     if type(tokens) is int and tokens >= 0:
         feedback += f" {tokens:,} tokens."
-    return "", display, {"history": history, "display": display}, feedback, sources, format_tool_calls(body["trace"]), details, format_retrieval(body["trace"]), format_context(body), format_rag_demo(body["trace"])
+    feedback = _security_feedback(feedback, body)
+    return "", display, {"history": history, "display": display, "messages": messages}, feedback, sources, format_tool_calls(body["trace"]), details, format_retrieval(body["trace"]), format_context(body), format_rag_demo(body["trace"])
 
 
 def new_chat():

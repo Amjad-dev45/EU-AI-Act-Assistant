@@ -13,8 +13,9 @@ def _button(enabled=False, label=READY_LABEL):
     return {"__type__": "update", "interactive": enabled, "value": label}
 
 
-def submit_with_sharing(message, session, injection_test=False):
-    outputs = list(submit_chat(message, session, injection_test))
+def _with_sharing(outputs):
+    """Attach sharing state to any chat result, including an edit reset."""
+    outputs = list(outputs)
     # Keep the approval token only in server-side session state, not the JSON
     # inspector, conversation history, prompts, or subsequent model requests.
     details = dict(outputs[6])
@@ -23,6 +24,10 @@ def submit_with_sharing(message, session, injection_test=False):
     ready = bool(details.get("status") == "answered" and share.get("available") and share.get("token"))
     state = {"token": share["token"], "request_id": details.get("request_id")} if ready else {}
     return *outputs, state, _button(ready), share.get("message", DEFAULT_MESSAGE)
+
+
+def submit_with_sharing(message, session, injection_test=False):
+    return _with_sharing(submit_chat(message, session, injection_test))
 
 
 def clear_with_sharing():

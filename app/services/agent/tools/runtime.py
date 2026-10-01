@@ -1,4 +1,4 @@
-"""Three bounded tools; the agent communicates with RAG only over HTTP."""
+"""Five bounded read-only tools; corpus access stays behind the RAG HTTP API."""
 import ast
 import hashlib
 import json
@@ -8,7 +8,7 @@ import re
 import time
 
 from simpleeval import SimpleEval
-from contracts.injection_guard import source_risks
+from contracts.injection_guard import source_risks, SourceInjectionError
 
 
 def function(name, description, properties):
@@ -22,9 +22,13 @@ TOOLS = [
              {"query": {"type": "string"}}),
     function("calculator", "Evaluate bounded numeric arithmetic, including percentages written as division by 100.",
              {"expression": {"type": "string"}}),
-    function("quote_exact", "Verify and copy literal source wording, not a generated summary. Use document_id and page from evidence; when a chunk spans pages, try its other cited page if the phrase is not found. A null phrase returns the full page.",
+    function("quote_exact", "Verify and copy literal source wording, not a generated summary. First obtain the actual source filename and page using search_corpus, unless the user supplied them. Never guess document IDs or pages. Copy a substantive phrase from evidence; when a chunk spans pages, try its other cited page if the phrase is not found. A null phrase returns the full page for inspection.",
              {"document_id": {"type": "string"}, "page": {"type": "integer"},
               "phrase": {"type": ["string", "null"]}}),
+    function("lookup_definition", "Find the definition of any term in the supplied corpus, with source/page citations. Checks structured definitions, then searches the entire corpus using hybrid retrieval and reranking, with no article restriction. Prefer this for definitions; for comparisons call once per term. Pass only the term, not a question. A mere mention is insufficient: no supported definition returns found=false, and ambiguous definitions require clarification.",
+             {"term": {"type": "string"}}),
+    function("get_application_dates", "Look up application dates and exceptions in the uploaded Act, without guessing from semantic matches. Choose topic: general, ai_literacy, prohibited_practices, gpai, governance, penalties, gpai_fines, conformity_bodies, confidentiality, high_risk_products, high_risk, transparency, legacy_gpai, legacy_high_risk, large_scale_it. For models already on the market use legacy_gpai; preserve all conditions in returned clauses. Other deadlines use search_corpus.",
+             {"topic": {"type": "string"}}),
 ]
 
 
@@ -76,8 +80,11 @@ class ToolSession:
                 or any(type(page) is not int or page < 1 for page in pages)
                 or any(not isinstance(value, str) or not value for value in (document, source, hit.get("chunk_id")))):
             raise ValueError("RAG returned evidence without valid source metadata.")
-        if source_risks(text):
-            raise ValueError("The source contains instructions aimed at the assistant and was excluded.")
+        risks = source_risks(text)
+        if risks:
+            raise SourceInjectionError("The source contains instructions aimed at the assistant and was excluded.",
+                blocked={"source": source, "pages": pages, "chunk_id": hit["chunk_id"],
+                         "reasons": risks, "stage": "agent_evidence"})
         row = {"text": text, "pages": pages, "document_id": document,
                "source": source, "chunk_id": hit["chunk_id"]}
         for number, old in self.evidence.items():
@@ -104,10 +111,14 @@ class ToolSession:
         if set(arguments) != {"query"} or not isinstance(query, str) or not query.strip() or len(query) > 2000:
             raise ValueError("Search needs one nonempty query of at most 2000 characters.")
         result = self.http("/v1/answer", {"query": query, **({"injection_test": True} if self.injection_test else {})})
+        return self.read_answer(result)
+
+    def read_answer(self, result):
+        """Share evidence validation, citation remapping and cost/trace accounting."""
         self.last_diagnostics = {
             "retrieval": result.get("retrieval", {}), "context": result.get("context", {}),
             "answer": {key: result.get("grounded_answer", {}).get(key) for key in
-                       ("status", "answer_mode", "refusal_reason", "top_rerank_score", "usage", "model")},
+                       ("status", "answer_mode", "refusal_reason", "top_rerank_score", "usage", "model", "security")},
         }
         self.embedding_tokens += max(0, int(result.get("retrieval", {}).get("embedding_tokens") or 0))
         hits = result.get("hits", result.get("context", {}).get("hits", []))
@@ -142,6 +153,10 @@ class ToolSession:
                 token = f"rag-{len(self.grounded) + 1}"
                 self.grounded[token] = {"answer": answer, "citations": citations, "status": grounded["status"]}
                 output["grounded_answer"] = {"id": token, **self.grounded[token]}
+        if not rows:
+            output['retrieval_hint'] = ('No usable source evidence was returned. For a quotation request, '
+                'retry search_corpus with the requested content, keeping its topic and qualifications '
+                'but omitting quote-formatting instructions. Do not guess document IDs or pages.')
         return output
 
     def quote(self, arguments):
@@ -152,6 +167,7 @@ class ToolSession:
                 or type(page) is not int or page < 1
                 or (phrase is not None and (not isinstance(phrase, str) or not phrase or len(phrase) > 2000))):
             raise ValueError("Invalid exact-quote arguments.")
+        known = [row for row in self.evidence.values() if row['document_id'] == document]
         try:
             result = self.http("/v1/quote", arguments)
         except ValueError as exc:
@@ -160,8 +176,15 @@ class ToolSession:
             other_pages = sorted({p for row in self.evidence.values()
                                   if row['document_id'] == document and page in row['pages']
                                   for p in row['pages'] if p != page})
-            hint = (f" This retrieved chunk also covers pages {other_pages}; try those pages."
-                    if other_pages else " Check the document/page or inspect the page with phrase=null.")
+            if other_pages:
+                hint = f" This retrieved chunk also covers pages {other_pages}; try those pages."
+            elif any(page in row['pages'] for row in known):
+                hint = " Inspect the retrieved page with phrase=null and copy its literal text."
+            else:
+                hint = " Call search_corpus to obtain the actual source filename and page before retrying. Do not guess other pages."
+                if self.evidence and not known:
+                    documents = sorted({row['document_id'] for row in self.evidence.values()})
+                    hint += f" Use an exact filename from source evidence: {documents}."
             raise ValueError(f"Exact quote was not found on page {page}." + hint) from None
         text, citation = result.get("text"), result.get("citation", {})
         if not result.get("found") or not isinstance(text, str) or not text:
@@ -174,6 +197,27 @@ class ToolSession:
         row = self.add_evidence({"text": text, "document_id": document, "source": document,
                                 "pages": [page], "chunk_id": f"quote:{document}:{page}:{digest}"})
         return {"found": True, "quote": text, "evidence": [row]}
+
+    def lookup(self, name, arguments):
+        """Register direct source clauses as evidence using the normal citation IDs."""
+        field, route = ('term', '/v1/definition') if name == 'lookup_definition' else ('topic', '/v1/application-dates')
+        if (set(arguments) != {field} or not isinstance(arguments[field], str)
+                or not arguments[field].strip() or len(arguments[field]) > 200):
+            raise ValueError(f'{name} needs one nonempty {field} of at most 200 characters.')
+        result = self.http(route, arguments)
+        if name == 'lookup_definition' and result.get('mode') == 'corpus_search':
+            output = self.read_answer(result)
+            grounded = output.get('grounded_answer', {})
+            return {**output, 'term': result.get('term'), 'mode': 'corpus_search',
+                    'found': grounded.get('status') == 'answered', 'message': result.get('message')}
+        hits = result.get('hits', [])
+        if not isinstance(hits, list) or len(hits) > 8:
+            raise ValueError('Lookup returned invalid evidence.')
+        rows = [self.add_evidence(hit) for hit in hits]
+        if result.get('found') is True and not rows:
+            raise ValueError('Lookup claimed success without source evidence.')
+        return {**{k:v for k,v in result.items() if k not in {'hits', 'request_id', 'mock', 'duration_ms'}},
+                'evidence': rows}
 
     def execute(self, name, arguments):
         self.last_diagnostics = None
@@ -193,6 +237,8 @@ class ToolSession:
             result = calculate(arguments["expression"])
         elif name == "quote_exact":
             result = self.quote(arguments)
+        elif name in {'lookup_definition', 'get_application_dates'}:
+            result = self.lookup(name, arguments)
         else:
             raise ValueError("Unknown tool.")
         self.cache[key] = result

@@ -45,15 +45,24 @@ class UiChatTests(unittest.TestCase):
         self.assertNotIn("internal_config", output[6])
         self.assertEqual(output[2]["history"][-1]["content"], response["answer"])
 
-    def test_history_limits_keep_complete_recent_pairs(self):
-        messages = [{"role": role, "content": f"{index}" + "x" * 5000}
+    def test_history_keeps_last_five_individual_messages_in_order(self):
+        messages = [{"role": role, "content": f"{index}:{role}"}
                     for index in range(5) for role in ("user", "assistant")]
         result = chat.bounded_history(messages)
-        self.assertLessEqual(len(result), 6)
-        self.assertEqual(len(result) % 2, 0)
-        self.assertLessEqual(sum(len(item["content"]) for item in result), 24000)
-        self.assertEqual(result[-1], messages[-1])
-        self.assertEqual(result[0]["role"], "user")
+        self.assertEqual(result, messages[-5:])
+        self.assertEqual(chat.bounded_history(result), result)
+        self.assertEqual(result[0]["role"], "assistant")
+        with patch.object(chat, "call_json", return_value=(200, answer_response())) as call:
+            output = chat.submit_chat("Next question", {"history": result, "display": []})
+        self.assertEqual(call.call_args.args[2]["history"], messages[-5:])
+        self.assertEqual(output[2]["history"], (messages + [
+            {"role": "user", "content": "Next question"},
+            {"role": "assistant", "content": answer_response()["answer"]}])[-5:])
+
+    def test_history_character_limit_retains_the_newest_messages(self):
+        messages = [{"role": role, "content": f"{index}" + "x" * 5000}
+                    for index in range(5) for role in ("user", "assistant")]
+        self.assertEqual(chat.bounded_history(messages), messages[-4:])
 
     def test_failed_request_preserves_question_history_and_hides_error_details(self):
         session = {"history": [{"role": "user", "content": "Old question"},
@@ -74,7 +83,7 @@ class UiChatTests(unittest.TestCase):
             chat.submit_chat("Follow-up", {"history": history, "display": []})
         payload = call.call_args.args[2]
         self.assertLessEqual(len(json.dumps(payload).encode("utf-8")), 128 * 1024)
-        self.assertEqual(len(payload["history"]) % 2, 0)
+        self.assertEqual(payload["history"], history[-2:])
 
     def test_http_failure_and_mock_response_are_not_presented_as_real_answers(self):
         for status, response in ((500, {"error": {"message": "provider-secret"}}),

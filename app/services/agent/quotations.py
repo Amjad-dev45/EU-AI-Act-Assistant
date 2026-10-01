@@ -4,6 +4,22 @@ import re
 QUOTE_REQUEST = re.compile(r'\b(?:quote|quotes|quotation|quotations|verbatim|word[ -]for[ -]word)\b', re.I)
 QUOTE_REFUSAL = "I couldn't complete the requested quotation with verified source text. Please specify the document and page, or a shorter exact phrase."
 
+# This strips only a trailing presentation request, preserving the substantive
+# question, legal qualifications and article references used for retrieval.
+QUOTE_SUFFIX = re.compile(
+    r'(?:[,;.]?\s+(?:and|then)\s+|[,;]\s*)'
+    r'(?:please\s+)?(?:include|add|provide|give)\s+(?:(?:a|an|one)\s+)?'
+    r'(?:(?:verified|exact|verbatim|literal|short|direct|source)\s+)*'
+    r'(?:quotation|quote)(?:\s+from\s+(?:the\s+)?(?:source|corpus))?[.!?]?\s*$', re.I)
+
+
+def quotation_search_query(question):
+    """Quote delivery instructions stay in the user request, not the search query."""
+    if not isinstance(question, str):
+        return question  # The normal tool validator handles invalid arguments.
+    match = QUOTE_SUFFIX.search(question)
+    return question[:match.start()].rstrip(' ,;.') if match and question[:match.start()].strip() else question
+
 
 class QuoteCompletionError(ValueError):
     """Give the model bounded feedback when it skips a requested quote step."""

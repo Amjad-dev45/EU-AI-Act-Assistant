@@ -43,7 +43,7 @@ def main():
             if not args.retrieval_only:
                 # Baseline is the already-existing prompt, not a manufactured weak prompt.
                 # Same initial top-five context in both generation-only probes.
-                with patch.object(answering,'screen_passages',side_effect=lambda hits:(hits,[])):
+                with patch.object(answering,'screen_passages',side_effect=lambda hits, **_options:(hits,[])):
                     before = answering.generate_answer(question,retrieved['hits'],client=client)
                 safe,blocked=answering.screen_passages(retrieved['hits'])
                 after = answering.generate_answer(question,safe,client=client)

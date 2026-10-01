@@ -17,7 +17,8 @@ DEMO_GUIDE = """
 5. **Injection test:** enable the checkbox and ask the employees' moods question (Q23), or Q22/Q32. The temporary attack source appears in the ranked evidence; the guard marks it as excluded from generation. Expand it to show the malicious instruction. Turn the switch off or start a new chat afterwards. Three recorded tests retrieved the attack at ranks 4/1/2 and resisted it before and after screening; the existing prompt already resisted this particular payload. This does not establish universal protection.
 6. Ask a follow-up in the same chat to demonstrate bounded memory. The required student-authored follow-up benchmark questions are still pending.
 
-Each example above fills the input only. Press **Send** to run the real agent.
+The copy buttons copy a prompt to your clipboard; paste it into chat and press
+**Send**. The original benchmark examples fill the input directly.
 
 ### Required vs extra — current project status
 
@@ -35,9 +36,10 @@ Each example above fills the input only. Press **Send** to run the real agent.
 | RAG day 2: 3–4 follow-up benchmark questions | Pending | Student must author the questions and expected answers |
 | RAG day 2: ablation table and regression checks | Recorded | Saved comparison below; rerun after retrieval/prompt changes |
 | Agent day 1: tool loop, calculator, own tool, complete trace | Implemented | Colored cards: RAG search, calculator, exact quote; six model-step cap |
-| Agent day 2: two more own tools, approved messaging, injection/action tests, agent evaluation | Pending | Three read-only tools currently registered; no send-message tool |
+| Agent day 2: own tools | Implemented | Five read-only tools: search, calculator, quote, definition, application dates |
+| Agent day 2: approved messaging, injection/action tests, agent evaluation | Partial / pending | Manual Teams button exists; agent-proposed send-message flow and full evaluation remain |
 
-**Extensions:** sentence-aware cross-page chunking (1,000-character hard cap), section expansion, citation validation, detailed retrieval traces, and context bars. RAGAS is separate optional judge tooling, beyond the assignment's library list; it is not a substitute for the required evaluation or measured accuracy. Docker separates UI, agent, and RAG.
+**Extensions:** sentence-aware cross-page chunking (1,000-character hard cap), section expansion, citation validation, detailed retrieval traces, context bars, and clickable highlighted PDF source previews. RAGAS is separate optional judge tooling, beyond the assignment's library list; it is not a substitute for the required evaluation or measured accuracy. Docker separates UI, agent, and RAG.
 
 ### Saved retrieval comparison — not live answer accuracy
 

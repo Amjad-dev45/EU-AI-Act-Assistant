@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'app'))
 from services.rag.diagnostics import build_trace
 from services.agent.tools.runtime import ToolSession
 from services.ui.retrieval_trace import format_retrieval
+from services.ui.tool_calls import format_tool_calls
+from services.ui.security_notice import tool_security_events
+from services.ui.execution_steps import format_execution_steps
 from test_agent_loop import client_for, response, final, rag_response
 
 
@@ -22,6 +25,31 @@ def diagnostic():
 
 
 class TraceTests(unittest.TestCase):
+    def test_injection_guard_is_a_collapsed_substep_in_the_correct_tool_call(self):
+        data = {'retrieval': {'trace': diagnostic()}, 'answer': {'status': 'answered'},
+                'context': {'security': {'blocked': [{'chunk_id': 'b', 'source': 'act.pdf',
+                    'pages': [51], 'reasons': ['instruction_override'], 'stage': 'retrieval_screening'}]}}}
+        call = {'type': 'tool', 'name': 'search_corpus', 'diagnostics': data, 'output': {}}
+        steps = format_execution_steps(data, 2, security_events=tool_security_events(call))
+        self.assertIn('2.7', steps)
+        self.assertIn('es-security', steps)
+        self.assertLess(steps.index('Select top passages'), steps.index('Source screening after retrieval'))
+        self.assertLess(steps.index('Source screening after retrieval'), steps.index('RAG answer'))
+        self.assertIn('Flagged passages appeared in: FAISS, BM25', steps)
+        cards = format_tool_calls([{'type': 'tool', 'name': 'calculator', 'output': {'result': 4}}, call])
+        self.assertIn('2. RAG search', cards)
+        self.assertIn('Injection blocked', cards)
+        self.assertNotIn(' open', cards)
+
+    def test_agent_evidence_check_is_visible_even_without_a_retrieval_trace(self):
+        call = {'type': 'tool', 'name': 'quote_exact', 'output': {'error': 'SourceInjectionError',
+                'security': {'blocked': [{'source': 'law.pdf', 'pages': [1], 'chunk_id': 'bad',
+                    'reasons': ['instruction_override'], 'stage': 'agent_evidence'}]}}}
+        cards = format_tool_calls([call])
+        self.assertIn('Agent evidence validation', cards)
+        self.assertIn('es-security', cards)
+        self.assertNotIn('FAISS · semantic search', cards)
+
     def test_rank_changes_and_full_candidates_are_observed(self):
         trace = diagnostic()
         stages = {s['name']: s for s in trace['stages']}
