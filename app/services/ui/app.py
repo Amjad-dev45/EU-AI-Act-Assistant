@@ -2,9 +2,11 @@
 
 import os
 
-from .chat import new_chat, ping, submit_chat
+from .chat import ping
+from .sharing import DEFAULT_MESSAGE, clear_with_sharing, send_to_teams, submit_with_sharing
 from .tool_calls import TOOL_CSS, format_tool_calls
-from .context_usage import CONTEXT_CSS, format_context
+from .retrieval_trace import RETRIEVAL_CSS, format_retrieval
+from .context_usage import CONTEXT_CSS, CONTEXT_LAYOUT_CSS, format_context
 from .rag_demo import RAG_CSS, format_rag_demo
 from .demo_guide import DEMO_GUIDE, DEMO_QUESTIONS
 
@@ -16,12 +18,18 @@ def create_app():
     with gr.Blocks(title="EU AI Act Assistant") as demo:
         gr.Markdown("# EU AI Act Assistant\nAsk about the corpus, then ask follow-up questions.")
         state = gr.State({"history": [], "display": []})
+        share_state = gr.State({})
         with gr.Row():
             with gr.Column(scale=2):
-                conversation = gr.Chatbot(label="Conversation", height=520,
-                                          buttons=["copy"], sanitize_html=True)
-                context_bar = gr.HTML(format_context(), css_template=CONTEXT_CSS,
-                                      elem_id="context-usage", js_on_load=None)
+                # Group removes the layout gap between the chat and its meter.
+                with gr.Group(elem_id="conversation-context"):
+                    conversation = gr.Chatbot(label="Conversation", height=520,
+                                              buttons=["copy"], sanitize_html=True,
+                                              elem_id="conversation")
+                    context_bar = gr.HTML(format_context(), css_template=CONTEXT_CSS,
+                                          elem_id="context-usage", js_on_load=None,
+                                          padding=False,
+                                          head=f"<style>{CONTEXT_LAYOUT_CSS}</style>")
                 message = gr.Textbox(label="Your question", lines=2,
                                      placeholder="What obligations does Article 4 introduce?")
                 injection_test = gr.Checkbox(value=False, label="Injection test (demo only)",
@@ -30,6 +38,8 @@ def create_app():
                     send = gr.Button("Send", variant="primary")
                     clear = gr.Button("New chat")
                 status = gr.Markdown("Remembers up to three recent exchanges in this tab.")
+                share_button = gr.Button("Send to Teams", interactive=False, size="sm")
+                share_status = gr.Markdown(DEFAULT_MESSAGE, elem_id="teams-share-status")
             with gr.Column(scale=1):
                 gr.Markdown("### Sources")
                 sources = gr.Markdown("Sources will appear here.")
@@ -49,16 +59,21 @@ def create_app():
                 gr.Markdown(DEMO_GUIDE)
 
         with gr.Accordion("Full retrieval details", open=False):
-            retrieval_details = gr.Markdown()
+            retrieval_details = gr.HTML(format_retrieval([]), css_template=RETRIEVAL_CSS,
+                                        elem_id="retrieval-details", js_on_load=None)
 
         outputs = [message, conversation, state, status, sources, trajectory, details, retrieval_details, context_bar, rag_walkthrough]
         # One shared event prevents enter/click double submission. Reset uses the
         # same queue so an in-flight answer cannot repopulate a cleared chat.
-        gr.on([message.submit, send.click], submit_chat, [message, state, injection_test], outputs,
+        share_outputs = [share_state, share_button, share_status]
+        gr.on([message.submit, send.click], submit_with_sharing, [message, state, injection_test], [*outputs, *share_outputs],
               trigger_mode="once", concurrency_limit=1, concurrency_id="chat",
               api_name="chat", show_progress="full")
-        clear.click(lambda: (*new_chat(), False), None, [*outputs, injection_test], trigger_mode="once",
+        clear.click(clear_with_sharing, None, [*outputs, *share_outputs, injection_test], trigger_mode="once",
                     concurrency_limit=1, concurrency_id="chat", api_name="new_chat")
+        share_button.click(send_to_teams, [share_state, details], share_outputs, trigger_mode="once",
+                           concurrency_limit=1, concurrency_id="chat", api_name=False,
+                           show_progress="minimal")
 
         with gr.Accordion("Connection check", open=False):
             connection = gr.Button("Check connection")

@@ -28,6 +28,7 @@ services:
     user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      web_hook: ${web_hook:-}
       AGENT_PORT: "8001"
       RAG_URL: http://rag:8002
       RAG_TIMEOUT_S: ${RAG_TIMEOUT_S:-90}

@@ -6,6 +6,7 @@ from contracts.errors import ApiError, BAD_GATEWAY
 from contracts.httpkit import call_json, serve_forever
 from contracts.schemas import validate_ping
 from .loop import run_agent
+from .teams import prepare_share, send_share
 
 RAG_URL = os.environ.get("RAG_URL", "http://rag:8002")
 RAG_TIMEOUT_S = float(os.environ.get("RAG_TIMEOUT_S", "3"))
@@ -36,10 +37,17 @@ def ping(body):
     return 200, {"request_id": rid, "ok": True, "echo": req["message"], "chain": chain}
 
 
+def chat(body):
+    result = run_agent(body)
+    result["sharing"] = prepare_share(body["message"].strip(), result)
+    return 200, result
+
+
 ROUTES = {
     ("GET", "/health"): health,
     ("POST", "/v1/ping"): ping,  # connectivity test
-    ("POST", "/v1/chat"): lambda body: (200, run_agent(body)),
+    ("POST", "/v1/chat"): chat,
+    ("POST", "/v1/share/teams"): send_share,  # UI approval only; not an LLM tool
 }
 
 

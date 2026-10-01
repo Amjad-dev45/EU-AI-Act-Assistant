@@ -711,3 +711,28 @@ recovered from an initial page-50 miss. Reports: `logs/agent_quote_priority.json
 and `logs/agent_quote_regression.json`. Prompt retries can consume the full six
 steps; the model can still duplicate quote wording in its explanation, but the
 separate Verified quotation block always comes from the successful tool result.
+
+## Share an answer to Microsoft Teams
+
+Set `web_hook` in the existing `.env`, then rebuild/restart with
+`uv run scripts/run_app.py up -d --build`. After a successful answer, click
+**Send to Teams** below the conversation. The click approves sending the latest
+question, displayed answer (including verified quotations), and cited source/page
+labels to the configured Teams channel. No conversation history or tool traces
+are included. New chat, a refusal, or a failed question clears sharing readiness.
+
+The Agent stores the prepared card in `logs/agent_runs/teams_shares.sqlite3` and
+accepts only its opaque token at `POST /v1/share/teams`. The UI cannot replace the
+text or destination. Only the Agent receives `web_hook`; it is never supplied to
+the model, browser, images, or logs. The model has no messaging tool and cannot
+approve a send through a prompt. This is manual answer sharing, not the full
+assignment's model-proposed messaging workflow or action-injection evaluation.
+
+Messages use Microsoft's [Adaptive Card webhook format](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook).
+Oversized cards are rejected without truncating quotations. A durable claim
+prevents double clicks or restarts from submitting the same draft twice. There
+are no automatic retries: timeouts can happen after Teams accepted a message.
+The UI distinguishes rejection and uncertain delivery from webhook acceptance;
+**Submitted to Teams** means the webhook accepted it, so check the channel for
+actual delivery. Custom Power Automate flows must accept the Adaptive Card
+`type: message` / `attachments` envelope and post it to the channel.

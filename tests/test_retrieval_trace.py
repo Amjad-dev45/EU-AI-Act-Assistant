@@ -34,7 +34,9 @@ class TraceTests(unittest.TestCase):
         self.assertIn('Cached result', ui)
         self.assertIn('Selected chunks', ui)
         self.assertNotIn('<script>', ui)
-        self.assertNotIn('[link](https://bad)', ui)
+        # This is now HTML rather than Markdown; source strings must remain
+        # inert text in the inspector, never active HTML links or scripts.
+        self.assertNotIn('<a href=', ui)
 
     def test_tool_cache_restores_diagnostics_and_calculator_clears_them(self):
         data = rag_response()

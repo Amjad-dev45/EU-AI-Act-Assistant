@@ -11,7 +11,7 @@ import sys
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
-SETTINGS = {"OPENAI_API_KEY", "SCAFFOLD_UI_PORT", "UI_TIMEOUT_S", "RAG_TIMEOUT_S",
+SETTINGS = {"OPENAI_API_KEY", "web_hook", "SCAFFOLD_UI_PORT", "UI_TIMEOUT_S", "RAG_TIMEOUT_S",
             "RAG_MIN_RERANK_SCORE", "LOCAL_UID", "LOCAL_GID"}
 
 

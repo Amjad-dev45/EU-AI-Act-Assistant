@@ -3,8 +3,10 @@ from html import escape
 import json
 import math
 from pathlib import Path
+from .json_view import JSON_CSS, json_content, json_view
+from .execution_steps import STEPS_CSS, format_execution_steps
 
-TOOL_CSS = Path(__file__).with_name("tool_calls.css").read_text(encoding="utf-8")
+TOOL_CSS = Path(__file__).with_name("tool_calls.css").read_text(encoding="utf-8") + JSON_CSS + STEPS_CSS
 # Fixed colors and icons identify tools; status is also written out in text.
 TOOLS = {
     "search_corpus": ("search", "RAG search", '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>'),
@@ -17,9 +19,15 @@ def _text(value):
     return escape(str(value), quote=True)
 
 
-def _json(value):
-    """Keep source-provided HTML inert, including within JSON/code blocks."""
-    return '<pre class="tc-json">' + _text(json.dumps(value, ensure_ascii=False, indent=2)) + '</pre>'
+def trace_card(label, preview, body, *, color="other", meta="", badges="", icon=""):
+    """Shared disclosure card for tool calls and observed retrieval stages."""
+    icon = icon or '<path d="M8 4H4v16h4m8-16h4v16h-4M10 9l-3 3 3 3m4-6 3 3-3 3"/>'
+    svg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icon + '</svg>'
+    summary = (f'<summary class="tc-summary"><span class="tc-icon">{svg}</span><span class="tc-heading">'
+               f'<span class="tc-title">{_text(label)}</span><span class="tc-preview">{_text(preview)}</span>'
+               + (f'<span class="tc-meta">{_text(meta)}</span>' if meta else '') + '</span>'
+               '<span class="tc-badges">' + badges + '</span><span class="tc-arrow" aria-hidden="true"></span></summary>')
+    return f'<details class="tc-card tc-{color}">' + summary + '<div class="tc-body">' + body + '</div></details>'
 
 
 def _arguments(value):
@@ -49,7 +57,7 @@ def _retrieval(data):
     if isinstance(context, dict) and context.get("applied"):
         content += '<p class="tc-muted">Answer context: ' + _text(context.get("heading") or "expanded section")
         content += ' · ' + _text(context.get("chunk_count", 0)) + ' passages</p>'
-    content += '<details class="tc-extra"><summary>Full retrieval details</summary>' + _json(data) + '</details></section>'
+    content += json_view(data, "Full retrieval details · JSON") + '</section>'
     return content
 
 
@@ -104,20 +112,22 @@ def format_tool_calls(trace):
         timing = ''
         if type(duration) in (int, float) and math.isfinite(duration) and duration >= 0:
             timing = f'{duration / 1000:.1f}s' if duration >= 1000 else f'{duration:.0f}ms'
-        svg = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icon + '</svg>'
-        summary = (f'<summary class="tc-summary"><span class="tc-icon">{svg}</span><span class="tc-heading">'
-                   f'<span class="tc-title">{_text(label)}</span><span class="tc-preview">{_text(preview)}</span>'
-                   f'<span class="tc-meta">Call {len(cards) + 1}' + (f' · {timing}' if timing else '') + '</span></span>'
-                   '<span class="tc-badges">' + badges + '</span><span class="tc-arrow" aria-hidden="true"></span></summary>')
-        body = '<div class="tc-body"><section class="tc-section"><h4>Input</h4>' + _json(args) + '</section>'
+        body = '<section class="tc-section"><h4>Input JSON</h4>' + json_content(args) + '</section>'
         body += '<section class="tc-section"><h4>Result</h4>' + _result(output) + '</section>'
         data = entry.get("diagnostics")
         if isinstance(data, dict):
             body += _retrieval(data)
         if cached:
             body += '<p class="tc-muted">Reused the earlier result; this tool was not run again.</p>'
-        body += '<details class="tc-extra"><summary>Full output · ' + _text(name) + '</summary>' + _json(output) + '</details></div>'
-        cards.append(f'<details class="tc-card tc-{color}">' + summary + body + '</details>')
+        body += json_view(output, "Output JSON · " + name)
+        call_number = len(cards) + 1
+        # Keep every substep inside its parent disclosure so collapsed calls
+        # occupy only one card, even when a turn runs several searches.
+        if name == 'search_corpus':
+            body = format_execution_steps(data, call_number, arguments=args, cached=cached) + body
+        card = trace_card(f'{call_number}. {label}', preview, body, color=color, badges=badges, icon=icon,
+                          meta='Tool call' + (f' · {timing}' if timing else ''))
+        cards.append(card)
     security = [e for e in trace if isinstance(e, dict) and e.get("type") == "security"] if isinstance(trace, list) else []
     if security and not cards:
         return '<p class="tc-empty"><strong>Request blocked before tools ran.</strong><br>An explicit instruction override was detected. No model or tool call was made.</p>'

@@ -69,7 +69,7 @@ def _sources(citations):
 def _public_details(body):
     """Show the answer contract, excluding arbitrary internal service metadata."""
     return {key: body[key] for key in ("request_id", "status", "answer", "citations", "trace",
-                                      "usage", "steps", "mock", "context_window") if key in body}
+                                      "usage", "steps", "mock", "context_window", "sharing") if key in body}
 
 
 def submit_chat(message, session, injection_test=False):
